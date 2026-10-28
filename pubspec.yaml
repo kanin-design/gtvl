@@ -1,0 +1,25 @@
+name: gtvl
+description: "GTVL: a clean, light home screen for Android TV."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # The only dependency: plays the aerial and video wallpapers.
+  video_player: ^2.11.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # Icons only; release builds keep just the glyphs in use.
+  uses-material-design: true
+  assets:
+    - assets/aerials.json
+    - assets/apple_root_ca.pem

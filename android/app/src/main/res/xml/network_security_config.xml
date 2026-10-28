@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Apple's aerial host is signed by Apple's private "Apple Root CA", which
+      Android does not ship. Trust it for this host only, on top of the system CAs.
+    -->
+    <domain-config>
+        <domain includeSubdomains="false">sylvan.apple.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/apple_root_ca" />
+        </trust-anchors>
+    </domain-config>
+    <!--
+      Apple serves its oldest aerial clips only over plain HTTP (the HTTPS
+      certificate of this host does not match). Everything else stays HTTPS-only.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">a1.phobos.apple.com</domain>
+    </domain-config>
+</network-security-config>
