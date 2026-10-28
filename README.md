@@ -29,6 +29,9 @@ flutter build apk --release --target-platform android-arm64
 adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
+Release builds are signed with the key that `android/key.properties` names
+(kept out of git); without that file, with the debug key.
+
 ## Code
 
 `lib/` holds one concern per file: `native.dart` (the Android bridge),
