@@ -17,13 +17,17 @@ class AppInfo {
   /// Last update time: a changed app gets a fresh tile.
   final int version;
 
-  Future<String?>? _tile;
+  Future<String?>? _tile, _icon;
 
-  /// Set once [tile] has loaded, so tiles that are ready draw on the first frame.
-  String? tilePath;
+  /// Set once [tile] or [icon] has loaded, so tiles that are ready draw on the
+  /// first frame.
+  String? tilePath, iconPath;
 
   /// The cached tile image: a TV banner (".b.png") or an icon (".i.png").
   Future<String?> get tile => _tile ??= Native.tile(package).then((path) => tilePath = path);
+
+  /// The app's icon filling a square (".s.png"), for rounded-square tiles.
+  Future<String?> get icon => _icon ??= Native.icon(package).then((path) => iconPath = path);
 }
 
 /// The installed apps, split into the dock (favourites, in the user's

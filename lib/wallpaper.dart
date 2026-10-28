@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
+import 'pictures.dart';
 import 'player.dart';
 import 'services.dart';
 
@@ -15,7 +17,8 @@ const gradients = <(String, List<Color>)>[
   ('Graphite', [Color(0xFF111214), Color(0xFF26282C), Color(0xFF3A3D42)]),
 ];
 
-/// The background: Apple aerials, a video or picture file, or a gradient.
+/// The background: Apple aerials, a video, a picture or a folder of them, or
+/// a gradient.
 /// The gradient also shows while a video loads, or if it cannot play.
 class Wallpaper extends StatelessWidget {
   const Wallpaper({super.key});
@@ -41,21 +44,98 @@ class Wallpaper extends StatelessWidget {
             ),
             if (config.wallpaper == 'aerials')
               ScenePlayer(
-                // A new quality starts over with films in that quality.
-                key: ValueKey(config.aerialQuality),
-                next: (previous) => s.aerials.next(previous, config.aerialQuality),
+                // A new quality or choice of scenes starts over with matching films.
+                key: ValueKey('${config.aerialQuality} ${config.aerialsOff.join(',')}'),
+                speed: config.aerialSpeed,
+                maxLength: config.aerialMinutes > 0 ? Duration(minutes: config.aerialMinutes) : null,
+                next: (previous) => s.aerials.next(
+                  previous,
+                  config.aerialQuality,
+                  off: config.aerialsOff,
+                  useSaved: config.aerialCache,
+                ),
                 onShowing: (scene) {
                   s.caption.value = scene.caption;
-                  s.aerials.remember(scene, config.aerialQuality);
+                  if (config.aerialCache) s.aerials.remember(scene, config.aerialQuality);
                 },
               )
             else if (config.wallpaper == 'video' && video != null)
-              ScenePlayer(key: ValueKey(video), next: (_) => Scene(video, '', file: true, loop: true))
+              ScenePlayer(
+                key: ValueKey(video),
+                speed: config.aerialSpeed,
+                next: (_) => Scene(video, '', file: true, loop: true),
+              )
             else if (config.wallpaper == 'image' && image != null)
-              Image.file(File(image), fit: BoxFit.cover, cacheWidth: size.width.round()),
+              Pictures.isPicture(image)
+                  ? Image.file(File(image), fit: BoxFit.cover, cacheWidth: size.width.round())
+                  : PictureShow(
+                      key: ValueKey(image),
+                      folder: image,
+                      every: Duration(minutes: config.pictureMinutes),
+                      cacheWidth: size.width.round(),
+                    ),
+            if (config.dimming > 0) ColoredBox(color: Color.fromRGBO(0, 0, 0, config.dimming)),
           ],
         );
       },
+    );
+  }
+}
+
+/// The pictures in [folder] in a shuffled order, each fading into the next
+/// after [every].
+class PictureShow extends StatefulWidget {
+  const PictureShow({super.key, required this.folder, required this.every, required this.cacheWidth});
+
+  final String folder;
+  final Duration every;
+
+  /// Pictures are decoded at the screen's width, however large they are.
+  final int cacheWidth;
+
+  @override
+  State<PictureShow> createState() => _PictureShowState();
+}
+
+class _PictureShowState extends State<PictureShow> {
+  List<String> _pictures = const [];
+  int _shown = 0;
+  Timer? _next;
+
+  @override
+  void initState() {
+    super.initState();
+    Pictures.list(widget.folder).then((found) {
+      if (mounted) setState(() => _pictures = found.pictures..shuffle());
+    });
+    _start();
+  }
+
+  @override
+  void didUpdateWidget(PictureShow old) {
+    super.didUpdateWidget(old);
+    if (old.every != widget.every) _start();
+  }
+
+  void _start() {
+    _next?.cancel();
+    _next = Timer.periodic(widget.every, (_) => setState(() => _shown++));
+  }
+
+  @override
+  void dispose() {
+    _next?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_pictures.isEmpty) return const SizedBox.shrink();
+    final path = _pictures[_shown % _pictures.length];
+    return AnimatedSwitcher(
+      duration: const Duration(seconds: 2),
+      layoutBuilder: (current, previous) => Stack(fit: StackFit.expand, children: [...previous, ?current]),
+      child: Image.file(File(path), key: ValueKey(path), fit: BoxFit.cover, cacheWidth: widget.cacheWidth),
     );
   }
 }

@@ -1,21 +1,25 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:flutter/widgets.dart';
 
 import 'apps.dart';
 import 'ui.dart';
 
-/// An app on the home screen: its TV banner, or its icon and name on a card.
+/// An app on the home screen: its TV banner, or its icon and name on a card;
+/// with [square], its icon in a rounded square.
 ///
-/// Focus lifts the tile toward the viewer: it grows, casts a soft shadow and
-/// catches a sheen of light. No outline.
+/// Focus lifts the tile toward the viewer: it grows and casts a soft shadow.
+/// No outline, no gloss.
 class AppTile extends StatelessWidget {
   const AppTile({
     super.key,
     required this.app,
     required this.onLaunch,
     required this.onMenu,
+    this.square = false,
+    this.radius = 10,
     this.autofocus = false,
     this.label = false,
     this.moving = false,
@@ -25,6 +29,8 @@ class AppTile extends StatelessWidget {
   final AppInfo app;
   final VoidCallback onLaunch;
   final VoidCallback onMenu;
+  final bool square;
+  final double radius;
   final bool autofocus;
 
   /// Shows the app's name under the tile while it has focus.
@@ -34,17 +40,7 @@ class AppTile extends StatelessWidget {
   final bool moving;
   final KeyEventResult Function(KeyEvent event)? onKey;
 
-  static final _radius = BorderRadius.circular(10);
   static const _lifted = [BoxShadow(color: Color(0x8C000000), blurRadius: 22, offset: Offset(0, 10))];
-  static const _sheen = DecoratedBox(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment(0.3, 0.8),
-        colors: [Color(0x40FFFFFF), Color(0x00FFFFFF)],
-      ),
-    ),
-  );
 
   @override
   Widget build(BuildContext context) => Pressable(
@@ -54,6 +50,21 @@ class AppTile extends StatelessWidget {
     onKey: onKey,
     builder: (context, focused) {
       final lift = focused || moving;
+      final corners = BorderRadius.circular(radius);
+      final face = Stack(
+        fit: StackFit.expand,
+        children: [
+          TileFace(app, square: square),
+          if (moving)
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(Icons.chevron_left, color: Look.white, shadows: Look.shadow),
+                Icon(Icons.chevron_right, color: Look.white, shadows: Look.shadow),
+              ],
+            ),
+        ],
+      );
       final tile = AnimatedScale(
         scale: lift ? 1.1 : 1,
         duration: Look.fast,
@@ -61,69 +72,74 @@ class AppTile extends StatelessWidget {
         child: AnimatedContainer(
           duration: Look.fast,
           curve: Look.ease,
-          decoration: BoxDecoration(borderRadius: _radius, boxShadow: lift ? _lifted : const []),
-          child: ClipRRect(
-            borderRadius: _radius,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                TileFace(app),
-                AnimatedOpacity(opacity: lift ? 1 : 0, duration: Look.fast, child: _sheen),
-                if (moving)
-                  const Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Icon(Icons.chevron_left, color: Look.white, shadows: Look.shadow),
-                      Icon(Icons.chevron_right, color: Look.white, shadows: Look.shadow),
-                    ],
-                  ),
-              ],
-            ),
-          ),
+          // Squares get smooth, continuous corners, like Apple's app icons.
+          decoration: square
+              ? ShapeDecoration(
+                  shape: RoundedSuperellipseBorder(borderRadius: corners),
+                  shadows: lift ? _lifted : const [],
+                )
+              : BoxDecoration(borderRadius: corners, boxShadow: lift ? _lifted : const []),
+          child: square
+              ? ClipRSuperellipse(borderRadius: corners, child: face)
+              : ClipRRect(borderRadius: corners, child: face),
         ),
       );
       if (!label) return tile;
-      return Column(
-        children: [
-          AspectRatio(aspectRatio: 16 / 9, child: tile),
-          const SizedBox(height: 8),
-          AnimatedOpacity(
-            opacity: focused ? 1 : 0,
-            duration: Look.fast,
-            child: Text(app.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Look.label),
-          ),
-        ],
+      return LayoutBuilder(
+        builder: (context, box) => Column(
+          children: [
+            AspectRatio(aspectRatio: square ? 1 : 16 / 9, child: tile),
+            const SizedBox(height: 8),
+            // A name may reach a little past a narrow square.
+            OverflowBox(
+              maxWidth: box.maxWidth * (square ? 1.8 : 1),
+              fit: OverflowBoxFit.deferToChild,
+              child: AnimatedOpacity(
+                opacity: focused ? 1 : 0,
+                duration: Look.fast,
+                child: Text(app.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Look.label),
+              ),
+            ),
+          ],
+        ),
       );
     },
   );
 }
 
 /// The picture on a tile: the TV banner, or the icon and name on a dark card
-/// for apps made for phones. Decoded at the size it is drawn.
+/// for apps made for phones; with [square], the icon filling the tile.
+/// Decoded at the size it is drawn.
 class TileFace extends StatelessWidget {
-  const TileFace(this.app, {super.key});
+  const TileFace(this.app, {super.key, this.square = false});
 
   final AppInfo app;
+  final bool square;
+
+  static const _card = Color(0xFF2A2C31);
 
   @override
   Widget build(BuildContext context) {
-    final path = app.tilePath;
-    if (path == null) {
-      return FutureBuilder<String?>(future: app.tile, builder: (context, _) => _face(context, app.tilePath));
-    }
-    return _face(context, path);
+    final path = square ? app.iconPath : app.tilePath;
+    if (path != null) return _face(context, path);
+    return FutureBuilder<String?>(
+      future: square ? app.icon : app.tile,
+      builder: (context, loaded) => _face(context, loaded.data),
+    );
   }
 
   Widget _face(BuildContext context, String? path) {
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    if (path != null && path.endsWith('.b.png')) {
+    // Banners and square icons fill the tile.
+    if (path != null && !path.endsWith('.i.png')) {
       return LayoutBuilder(
         builder: (context, box) =>
             Image.file(File(path), fit: BoxFit.cover, cacheWidth: (box.maxWidth * dpr).round(), gaplessPlayback: true),
       );
     }
+    if (square) return const ColoredBox(color: _card);
     return ColoredBox(
-      color: const Color(0xFF2A2C31),
+      color: _card,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10),
         child: Row(

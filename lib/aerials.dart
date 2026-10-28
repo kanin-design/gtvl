@@ -7,9 +7,12 @@ import 'package:flutter/services.dart';
 
 /// One video for the wallpaper player.
 class Scene {
-  const Scene(this.uri, this.caption, {this.file = false, this.loop = false});
+  const Scene(this.uri, this.caption, {this.kind = '', this.file = false, this.loop = false});
 
   final String uri;
+
+  /// For aerials, one of [Aerials.kinds].
+  final String kind;
 
   /// e.g. "Hawaii · Pu'u O 'Umi".
   final String caption;
@@ -36,6 +39,14 @@ class Aerials {
 
   static const qualities = ['1080p', '1080p_hdr', '4k', '4k_hdr'];
 
+  /// Scene kinds the user can turn off: from the space station, under the
+  /// sea, over cities, and over landscapes.
+  static const kinds = ['space', 'underwater', 'cities', 'landscapes'];
+  static const _cities = {'Dubai', 'Los Angeles', 'Hong Kong', 'San Francisco', 'London', 'New York City'};
+
+  /// The bag holds one selection of kinds; a new selection starts a new bag.
+  String _bagKinds = '';
+
   /// A film is hundreds of megabytes: the cache follows what plays, but at
   /// most this often, so it never doubles the traffic.
   static const _refreshAfter = Duration(hours: 12);
@@ -48,40 +59,68 @@ class Aerials {
     _all = [for (final video in json['videos']! as List) video as Map<String, Object?>];
   }
 
-  /// The film to play after [previous]: the saved one when starting, then a
-  /// shuffled one that is never the same twice in a row.
-  Scene? next(Scene? previous, String quality) {
-    if (previous == null) {
-      final saved = _saved(quality);
+  /// How many films there are of [kind].
+  int count(String kind) => _all.where((video) => _kind(video) == kind).length;
+
+  /// The film to play after [previous]: the saved one when starting (if
+  /// [useSaved]), then a shuffled one that is never the same twice in a row.
+  /// Kinds in [off] are skipped, unless that would leave nothing.
+  Scene? next(Scene? previous, String quality, {Set<String> off = const {}, bool useSaved = true}) {
+    if (previous == null && useSaved) {
+      final saved = _saved(quality, off);
       if (saved != null) return saved;
     }
-    if (_all.isEmpty) return null;
+    final allowed = _all.where((video) => !off.contains(_kind(video))).toList();
+    final films = allowed.isEmpty ? _all : allowed;
+    if (films.isEmpty) return null;
+    final selection = (off.toList()..sort()).join(',');
+    if (selection != _bagKinds) {
+      _bag.clear();
+      _bagKinds = selection;
+    }
     if (_bag.isEmpty) {
-      _bag.addAll(List.of(_all)..shuffle(_random));
+      _bag.addAll(List.of(films)..shuffle(_random));
       if (_bag.length > 1 && _caption(_bag.last) == previous?.caption) _bag.insert(0, _bag.removeLast());
     }
     final video = _bag.removeLast();
     final url = (video['url_$quality'] ?? video['url_1080p']) as String?;
-    return url == null ? null : Scene(url, _caption(video));
+    return url == null ? null : Scene(url, _caption(video), kind: _kind(video));
   }
 
   static String _caption(Map<String, Object?> video) =>
       [video['location'], video['title']].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
 
-  Scene? _saved(String quality) {
+  static String _kind(Map<String, Object?> video) => switch (video['location']) {
+    'ISS' => 'space',
+    'Undersea' => 'underwater',
+    final String place when _cities.contains(place) => 'cities',
+    _ => 'landscapes',
+  };
+
+  Scene? _saved(String quality, Set<String> off) {
     try {
       final meta = jsonDecode(_meta.readAsStringSync()) as Map<String, Object?>;
-      if (meta['quality'] != quality || !_video.existsSync()) return null;
-      return Scene(_video.path, meta['caption'] as String? ?? '', file: true);
+      final kind = meta['kind'] as String? ?? '';
+      if (meta['quality'] != quality || off.contains(kind) || !_video.existsSync()) return null;
+      return Scene(_video.path, meta['caption'] as String? ?? '', kind: kind, file: true);
     } on Object {
       return null; // nothing saved yet
+    }
+  }
+
+  /// Deletes the saved film, for when instant start is turned off.
+  Future<void> forget() async {
+    for (final file in [_meta, _video]) {
+      if (await file.exists()) await file.delete();
     }
   }
 
   /// Saves [scene] to disk for the next start, unless the saved film is recent.
   Future<void> remember(Scene scene, String quality) async {
     if (_saving || scene.file) return;
-    if (_saved(quality) != null && DateTime.now().difference(_meta.lastModifiedSync()) < _refreshAfter) return;
+    if (_saved(quality, const {}) != null && DateTime.now().difference(_meta.lastModifiedSync()) < _refreshAfter) {
+      return;
+    }
     _saving = true;
     final part = File('$_dir/aerial.part');
     try {
@@ -95,7 +134,7 @@ class Aerials {
       // Drop the old caption first, so a crash never pairs it with the new film.
       if (await _meta.exists()) await _meta.delete();
       await part.rename(_video.path);
-      await _meta.writeAsString(jsonEncode({'caption': scene.caption, 'quality': quality}));
+      await _meta.writeAsString(jsonEncode({'caption': scene.caption, 'kind': scene.kind, 'quality': quality}));
     } on Object catch (e) {
       debugPrint('Could not save aerial: $e');
     } finally {

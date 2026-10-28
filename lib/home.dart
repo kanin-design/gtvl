@@ -15,10 +15,15 @@ import 'wallpaper.dart';
 
 /// Sizes derived from the screen, so the layout fits any TV.
 class _Geometry {
-  _Geometry(Size size) : width = size.width, height = size.height, pad = (size.width * 0.04).roundToDouble() {
+  _Geometry(Size size, {required String dockSize, required this.square})
+    : width = size.width,
+      height = size.height,
+      pad = (size.width * 0.04).roundToDouble(),
+      columns = (square ? _squareColumns : _columns)[dockSize] ?? (square ? 10 : 6) {
     gap = (width * 0.014).roundToDouble();
     tileWidth = (width - 2 * pad - (columns - 1) * gap) / columns;
-    tileHeight = tileWidth * 9 / 16;
+    tileHeight = square ? tileWidth : tileWidth * 9 / 16;
+    radius = square ? (tileWidth * 0.225).roundToDouble() : 10;
     // Room above and below a tile for its focus lift and shadow.
     dockHeight = tileHeight * 1.36;
     dockIdle = height - dockHeight - height * 0.07;
@@ -26,10 +31,15 @@ class _Geometry {
     gridTop = dockTop + dockHeight + height * 0.02;
   }
 
-  static const columns = 6;
+  /// Tiles per row, by dock size: smaller tiles fit more. Squares are
+  /// narrower, so more of them fit at about the same height.
+  static const _columns = {'small': 8, 'medium': 6, 'large': 5};
+  static const _squareColumns = {'small': 13, 'medium': 10, 'large': 8};
   static const labelHeight = 26.0;
+  final bool square;
+  final int columns;
   final double width, height, pad;
-  late final double gap, tileWidth, tileHeight, dockHeight, dockIdle, dockTop, gridTop;
+  late final double gap, tileWidth, tileHeight, radius, dockHeight, dockIdle, dockTop, gridTop;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -184,67 +194,76 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     onPopInvokedWithResult: (didPop, _) {
       if (!didPop) _onBack();
     },
-    child: LayoutBuilder(
-      builder: (context, box) {
-        final g = _Geometry(box.biggest);
-        final eased = _eased;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            const Wallpaper(),
-            // Dims the wallpaper behind the app grid.
-            IgnorePointer(
-              child: FadeTransition(
-                opacity: eased,
-                child: const ColoredBox(color: Color(0x73000000)),
+    // Rebuilds on config changes too, so a new dock size applies at once.
+    child: ListenableBuilder(
+      listenable: s.config,
+      builder: (context, _) => LayoutBuilder(
+        builder: (context, box) {
+          final g = _Geometry(box.biggest, dockSize: s.config.dockSize, square: s.config.tileShape == 'square');
+          final eased = _eased;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              const Wallpaper(),
+              // Dims the wallpaper behind the app grid.
+              IgnorePointer(
+                child: FadeTransition(
+                  opacity: eased,
+                  child: const ColoredBox(color: Color(0x73000000)),
+                ),
               ),
-            ),
-            ListenableBuilder(
-              listenable: Listenable.merge([s.apps, s.config]),
-              builder: (context, _) => Stack(
-                children: [
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: g.gridTop,
-                    bottom: 0,
-                    child: AnimatedBuilder(
-                      animation: eased,
-                      child: RepaintBoundary(child: _gridView(g)),
-                      // Below the screen while home; not painted at all until it moves.
-                      builder: (context, grid) => Opacity(
-                        opacity: eased.value == 0 ? 0 : 1,
-                        child: Transform.translate(
-                          offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
-                          child: grid,
+              ListenableBuilder(
+                listenable: Listenable.merge([s.apps, s.config]),
+                builder: (context, _) => Stack(
+                  children: [
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: g.gridTop,
+                      bottom: 0,
+                      child: AnimatedBuilder(
+                        animation: eased,
+                        child: RepaintBoundary(child: _gridView(g)),
+                        // Below the screen while home; not painted at all until it moves.
+                        builder: (context, grid) => Opacity(
+                          opacity: eased.value == 0 ? 0 : 1,
+                          child: Transform.translate(
+                            offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
+                            child: grid,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: g.dockIdle,
-                    height: g.dockHeight,
-                    child: AnimatedBuilder(
-                      animation: eased,
-                      child: RepaintBoundary(child: _dockBar(g)),
-                      builder: (context, dock) =>
-                          Transform.translate(offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)), child: dock),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: g.dockIdle,
+                      height: g.dockHeight,
+                      child: AnimatedBuilder(
+                        animation: eased,
+                        child: RepaintBoundary(child: _dockBar(g)),
+                        builder: (context, dock) =>
+                            Transform.translate(offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)), child: dock),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            Positioned(left: g.pad - 10, right: g.pad, top: g.height * 0.045, child: _topBar()),
-          ],
-        );
-      },
+              Positioned(left: g.pad - 10, right: g.pad, top: g.height * 0.045, child: _topBar()),
+            ],
+          );
+        },
+      ),
     ),
   );
 
   Widget _dockBar(_Geometry g) {
     final apps = s.apps.dock;
+    final c = s.config;
+    final line = BorderSide(
+      color: Look.white.withValues(alpha: c.lineAlpha),
+      width: c.lineWidth,
+    );
     return FocusScope(
       node: _dock,
       onKeyEvent: _onDockKey,
@@ -252,7 +271,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (focused) _page.reverse();
       },
       child: Glass(
-        border: const Border.symmetric(horizontal: BorderSide(color: Look.hairline)),
+        sigma: c.glassBlur,
+        tint: Color(c.glassTint).withValues(alpha: c.glassTintAlpha),
+        border: c.lineWidth > 0 ? Border.symmetric(horizontal: line) : null,
         child: apps.isEmpty
             ? Center(child: Text(s.apps.loaded ? 'Hold OK on an app to add it here' : '', style: Look.value))
             : FocusTraversalGroup(
@@ -263,26 +284,33 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
                     padding: EdgeInsets.symmetric(horizontal: g.pad - g.gap / 2),
-                    child: Row(
-                      children: [
-                        for (var i = 0; i < apps.length; i++)
-                          Padding(
-                            key: ValueKey(apps[i].package),
-                            padding: EdgeInsets.symmetric(horizontal: g.gap / 2),
-                            child: SizedBox(
-                              width: g.tileWidth,
-                              height: g.tileHeight,
-                              child: AppTile(
-                                app: apps[i],
-                                autofocus: i == 0,
-                                moving: _moving == apps[i].package,
-                                onKey: _moving == apps[i].package ? _onMoveKey : null,
-                                onLaunch: () => Native.launch(apps[i].package),
-                                onMenu: () => _menu(apps[i]),
+                    // At least the screen's width, so apps that fit can spread across it.
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minWidth: g.width - 2 * g.pad + g.gap),
+                      child: Row(
+                        mainAxisAlignment: _arrangements[c.dockAlign] ?? MainAxisAlignment.start,
+                        children: [
+                          for (var i = 0; i < apps.length; i++)
+                            Padding(
+                              key: ValueKey(apps[i].package),
+                              padding: EdgeInsets.symmetric(horizontal: g.gap / 2),
+                              child: SizedBox(
+                                width: g.tileWidth,
+                                height: g.tileHeight,
+                                child: AppTile(
+                                  app: apps[i],
+                                  square: g.square,
+                                  radius: g.radius,
+                                  autofocus: i == 0,
+                                  moving: _moving == apps[i].package,
+                                  onKey: _moving == apps[i].package ? _onMoveKey : null,
+                                  onLaunch: () => Native.launch(apps[i].package),
+                                  onMenu: () => _menu(apps[i]),
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -290,6 +318,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
     );
   }
+
+  /// How the dock spreads apps that fit, by its "arrange" setting.
+  static const _arrangements = {
+    'center': MainAxisAlignment.center,
+    'evenly': MainAxisAlignment.spaceEvenly,
+    'between': MainAxisAlignment.spaceBetween,
+  };
 
   Widget _gridView(_Geometry g) {
     final apps = s.apps.others;
@@ -304,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         child: GridView.builder(
           padding: EdgeInsets.fromLTRB(g.pad, 18, g.pad, 60),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: _Geometry.columns,
+            crossAxisCount: g.columns,
             crossAxisSpacing: g.gap,
             mainAxisSpacing: g.gap * 0.6,
             childAspectRatio: g.tileWidth / (g.tileHeight + _Geometry.labelHeight),
@@ -313,6 +348,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           itemBuilder: (context, i) => AppTile(
             key: ValueKey(apps[i].package),
             app: apps[i],
+            square: g.square,
+            radius: g.radius,
             label: true,
             autofocus: i == 0 && s.apps.dock.isEmpty,
             onLaunch: () => Native.launch(apps[i].package),
@@ -359,7 +396,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 Clock(h24: s.config.clock24),
                 ValueListenableBuilder<String?>(
                   valueListenable: s.caption,
-                  builder: (context, caption, _) => caption == null || caption.isEmpty
+                  builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption
                       ? const SizedBox.shrink()
                       : Padding(
                           padding: const EdgeInsets.only(top: 4),

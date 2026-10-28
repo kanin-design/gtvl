@@ -12,13 +12,19 @@ import 'aerials.dart';
 /// the next one buffers, and none at all while another app is in front, so
 /// that app gets the hardware video decoders and the memory.
 class ScenePlayer extends StatefulWidget {
-  const ScenePlayer({super.key, required this.next, this.onShowing});
+  const ScenePlayer({super.key, required this.next, this.onShowing, this.speed = 1, this.maxLength});
 
   /// The scene after [previous]; null [previous] means starting.
   final Scene? Function(Scene? previous) next;
 
   /// Called when a scene starts fading in.
   final ValueChanged<Scene>? onShowing;
+
+  /// Playback speed; below 1 is slower and calmer.
+  final double speed;
+
+  /// Moves on after this much of a scene; null plays each scene to its end.
+  final Duration? maxLength;
 
   @override
   State<ScenePlayer> createState() => _ScenePlayerState();
@@ -52,6 +58,12 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _start();
+  }
+
+  @override
+  void didUpdateWidget(ScenePlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.speed != widget.speed) _now?.video.setPlaybackSpeed(widget.speed);
   }
 
   @override
@@ -114,6 +126,7 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
         try {
           await video.initialize();
           await video.setVolume(0);
+          if (widget.speed != 1) await video.setPlaybackSpeed(widget.speed);
           if (scene.loop) await video.setLooping(true);
           if (run != _run || !mounted) {
             await video.dispose();
@@ -162,7 +175,9 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
     if (now == null || _fading || now.scene.loop) return;
     final value = now.video.value;
     if (!value.isInitialized || value.duration == Duration.zero) return;
-    final left = value.duration - value.position;
+    final max = widget.maxLength;
+    final end = max != null && max < value.duration ? max : value.duration;
+    final left = end - value.position;
 
     if (left <= _lead && _next == null && !_preparing) {
       final run = _run;

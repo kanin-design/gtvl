@@ -8,7 +8,10 @@ import 'status.dart';
 
 /// Everything the UI shares, created once at start.
 class Services {
-  Services._(this.config, this.apps, this.status, this.aerials);
+  Services._(this.files, this.config, this.apps, this.status, this.aerials);
+
+  /// The app's private folder, where downloaded wallpapers are kept.
+  final String files;
 
   final Config config;
   final AppsModel apps;
@@ -24,7 +27,7 @@ class Services {
     final aerials = Aerials('${paths.cache}/aerial');
     await aerials.load();
     final apps = AppsModel(config)..load();
-    return Services._(config, apps, StatusModel(config), aerials);
+    return Services._(paths.files, config, apps, StatusModel(config), aerials);
   }
 
   static Services of(BuildContext context) => context.getInheritedWidgetOfExactType<Scope>()!.services;

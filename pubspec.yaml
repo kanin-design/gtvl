@@ -1,7 +1,7 @@
 name: gtvl
 description: "GTVL: a clean, light home screen for Android TV."
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.11.5
@@ -22,4 +22,10 @@ flutter:
   uses-material-design: true
   assets:
     - assets/aerials.json
+    - assets/defaults.json
     - assets/apple_root_ca.pem
+  # One variable font: FontWeight sets its weight axis. Licence in OFL.txt.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf

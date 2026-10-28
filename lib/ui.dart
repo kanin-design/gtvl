@@ -1,12 +1,9 @@
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-
-import 'services.dart';
 
 /// The few values the whole UI shares.
 abstract final class Look {
@@ -21,7 +18,13 @@ abstract final class Look {
   static const danger = Color(0xFFFF6B6B);
   static const shadow = [Shadow(color: Color(0x8C000000), blurRadius: 8, offset: Offset(0, 2))];
 
-  static const body = TextStyle(fontSize: 15, color: Color(0xF2FFFFFF), decoration: TextDecoration.none);
+  /// The app's default text style; every other style takes Inter from it.
+  static const body = TextStyle(
+    fontFamily: 'Inter',
+    fontSize: 15,
+    color: Color(0xF2FFFFFF),
+    decoration: TextDecoration.none,
+  );
   static const value = TextStyle(fontSize: 14, color: dim);
   static const small = TextStyle(fontSize: 12, color: dim, height: 1.3);
   static const label = TextStyle(fontSize: 13, color: white, fontWeight: FontWeight.w500, shadows: shadow);
@@ -50,7 +53,9 @@ class Pressable extends StatefulWidget {
     this.onPressed,
     this.onLongPress,
     this.onKey,
+    this.onFocusChange,
     this.autofocus = false,
+    this.focusNode,
   });
 
   final Widget Function(BuildContext context, bool focused) builder;
@@ -59,7 +64,9 @@ class Pressable extends StatefulWidget {
 
   /// Sees every key first, e.g. arrows while something is being moved.
   final KeyEventResult Function(KeyEvent event)? onKey;
+  final ValueChanged<bool>? onFocusChange;
   final bool autofocus;
+  final FocusNode? focusNode;
 
   @override
   State<Pressable> createState() => _PressableState();
@@ -110,6 +117,7 @@ class _PressableState extends State<Pressable> {
 
   @override
   Widget build(BuildContext context) => Focus(
+    focusNode: widget.focusNode,
     autofocus: widget.autofocus,
     onKeyEvent: _onKey,
     onFocusChange: (focused) {
@@ -118,6 +126,7 @@ class _PressableState extends State<Pressable> {
         _hold = null;
       }
       setState(() => _focused = focused);
+      widget.onFocusChange?.call(focused);
     },
     child: widget.builder(context, _focused),
   );
@@ -150,8 +159,7 @@ void reveal(BuildContext context, {double margin = 28}) {
   );
 }
 
-/// Frosted glass: blurs what is behind it and tints it. Plain tint when blur
-/// is switched off.
+/// Frosted glass: blurs what is behind it by [sigma] (0 for none) and tints it.
 class Glass extends StatelessWidget {
   const Glass({
     super.key,
@@ -170,18 +178,13 @@ class Glass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final blur = Services.of(context).config.blur;
     final body = DecoratedBox(
-      decoration: BoxDecoration(
-        color: blur ? tint : tint.withValues(alpha: (tint.a * 2.5).clamp(0.0, 0.92)),
-        borderRadius: radius,
-        border: border,
-      ),
+      decoration: BoxDecoration(color: tint, borderRadius: radius, border: border),
       child: child,
     );
     return ClipRRect(
       borderRadius: radius,
-      child: blur
+      child: sigma > 0
           ? BackdropFilter(
               filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
               child: body,
@@ -208,7 +211,7 @@ class Hairline extends StatelessWidget {
   );
 }
 
-/// An on/off switch, drawn small.
+/// An on/off switch, in white and grey: no colour to compete with the wallpaper.
 class Toggle extends StatelessWidget {
   const Toggle({super.key, required this.on});
 
@@ -217,108 +220,24 @@ class Toggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedContainer(
     duration: Look.fast,
-    width: 34,
-    height: 20,
+    width: 36,
+    height: 21,
     padding: const EdgeInsets.all(2),
     decoration: BoxDecoration(
-      color: on ? Look.white : const Color(0x33FFFFFF),
-      borderRadius: BorderRadius.circular(10),
+      color: on ? const Color(0xE6FFFFFF) : const Color(0x33FFFFFF),
+      borderRadius: BorderRadius.circular(11),
     ),
     child: AnimatedAlign(
       duration: Look.fast,
       curve: Look.ease,
       alignment: on ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        width: 16,
-        height: 16,
-        decoration: BoxDecoration(color: on ? const Color(0xFF1C1C1E) : Look.white, shape: BoxShape.circle),
+      child: SizedBox.square(
+        dimension: 17,
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: on ? const Color(0xFF1C1C1E) : Look.white, shape: BoxShape.circle),
+        ),
       ),
     ),
-  );
-}
-
-/// A settings row: icon, label, then a value, a switch or a chevron.
-class SettingRow extends StatelessWidget {
-  const SettingRow(
-    this.label, {
-    super.key,
-    this.icon,
-    this.value,
-    this.toggle,
-    this.chevron = false,
-    this.note,
-    this.autofocus = false,
-    this.onPressed,
-    this.onKey,
-  });
-
-  final String label;
-  final IconData? icon;
-  final String? value;
-  final bool? toggle;
-  final bool chevron;
-  final String? note;
-  final bool autofocus;
-  final VoidCallback? onPressed;
-  final KeyEventResult Function(KeyEvent event)? onKey;
-
-  @override
-  Widget build(BuildContext context) => Pressable(
-    autofocus: autofocus,
-    onPressed: onPressed,
-    onKey: onKey,
-    builder: (context, focused) => AnimatedContainer(
-      duration: Look.fast,
-      curve: Look.ease,
-      margin: const EdgeInsets.symmetric(vertical: 1),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: focused ? Look.focusFill : const Color(0x00FFFFFF),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: 18, color: Look.white.withValues(alpha: focused ? 1 : 0.7)),
-            const SizedBox(width: 12),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label, style: Look.body),
-                if (note != null) Text(note!, style: Look.small),
-              ],
-            ),
-          ),
-          if (value != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Text(value!, style: Look.value),
-            ),
-          if (toggle != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Toggle(on: toggle!),
-            ),
-          if (chevron) const Icon(Icons.chevron_right, size: 18, color: Look.dim),
-        ],
-      ),
-    ),
-  );
-}
-
-/// Small explanatory text in a panel or menu.
-class Note extends StatelessWidget {
-  const Note(this.text, {super.key});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-    child: Text(text, style: Look.small),
   );
 }
 

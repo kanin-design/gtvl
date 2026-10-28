@@ -3,26 +3,42 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
-/// Everything the user can change, kept in one JSON file (config.json).
+/// Everything the user can change, kept in one JSON file (config.json) over
+/// the defaults that ship with the app (assets/defaults.json, the same shape).
 ///
-/// Unknown or mistyped values fall back to their defaults one by one, so a
+/// A missing or mistyped value falls back to its default on its own, so a
 /// hand-edited file never loses the rest. Saves happen shortly after a change,
 /// atomically (temp file, then rename), keeping the previous file as .bak.
 class Config extends ChangeNotifier {
-  Config._(this._dir, Map<String, Object?> json, {required this.isNew})
-    : dock = _strings(json['dock']),
-      hidden = {..._strings(json['hidden'])},
-      wallpaper = _get<String>(json, 'wallpaper') ?? 'aerials',
-      aerialQuality = _get<String>(json, 'aerialQuality') ?? '1080p',
-      gradient = _get<int>(json, 'gradient') ?? 0,
-      videoPath = _get<String>(json, 'videoPath'),
-      imagePath = _get<String>(json, 'imagePath'),
-      topIcons = _iconOrder(_strings(json['topIcons'])),
-      topHidden = {..._strings(json['topHidden'])},
-      vpnApp = _get<String>(json, 'vpnApp'),
-      clock24 = _get<bool>(json, 'clock24') ?? true,
-      blur = _get<bool>(json, 'blur') ?? true;
+  Config._(this._dir, _Values v, {required this.isNew})
+    : dock = v.strings('dock'),
+      hidden = {...v.strings('hidden')},
+      wallpaper = v.get('wallpaper'),
+      aerialQuality = v.get('aerialQuality'),
+      gradient = v.get('gradient'),
+      videoPath = v.get('videoPath'),
+      imagePath = v.get('imagePath'),
+      pictureMinutes = v.get('pictureMinutes'),
+      topIcons = _iconOrder(v.strings('topIcons')),
+      topHidden = {...v.strings('topHidden')},
+      vpnApp = v.get('vpnApp'),
+      clock24 = v.get('clock24'),
+      showCaption = v.get('showCaption'),
+      aerialsOff = {...v.strings('aerialsOff')},
+      aerialSpeed = v.number('aerialSpeed'),
+      aerialMinutes = v.get('aerialMinutes'),
+      aerialCache = v.get('aerialCache'),
+      dimming = v.number('dimming'),
+      glassBlur = v.number('glassBlur'),
+      glassTint = v.get('glassTint'),
+      glassTintAlpha = v.number('glassTintAlpha'),
+      lineWidth = v.number('lineWidth'),
+      lineAlpha = v.number('lineAlpha'),
+      dockSize = v.get('dockSize'),
+      tileShape = v.get('tileShape'),
+      dockAlign = v.get('dockAlign');
 
   /// Icons the top bar can show, in their default order.
   static const topIconIds = ['settings', 'network', 'vpn'];
@@ -41,30 +57,67 @@ class Config extends ChangeNotifier {
   String aerialQuality;
   int gradient;
   String? videoPath;
+
+  /// A picture, or a folder whose pictures show in turn.
   String? imagePath;
+
+  /// With a folder, the next picture shows after this many minutes.
+  int pictureMinutes;
 
   final List<String> topIcons;
   final Set<String> topHidden;
   String? vpnApp;
   bool clock24;
 
-  /// Frosted glass; off draws plain tints, for slow GPUs.
-  bool blur;
+  /// The wallpaper's location, under the clock.
+  bool showCaption;
+
+  /// Aerial scene kinds turned off (see Aerials.kinds).
+  final Set<String> aerialsOff;
+  double aerialSpeed;
+
+  /// Move on to the next film after this many minutes; 0 plays each to its end.
+  int aerialMinutes;
+
+  /// Keep one film on the TV for an instant start.
+  bool aerialCache;
+
+  /// Darkens the wallpaper, 0 to 1.
+  double dimming;
+
+  /// The dock's glass: blur radius (0 for none), tint colour and strength, and
+  /// the lines along its edges (width 0 for none).
+  double glassBlur;
+  int glassTint;
+  double glassTintAlpha;
+  double lineWidth;
+  double lineAlpha;
+
+  /// small, medium or large: how big the dock and app tiles are.
+  String dockSize;
+
+  /// wide (TV banners) or square (icons in rounded squares).
+  String tileShape;
+
+  /// How the dock spreads its apps when they fit: start, center, evenly
+  /// (equal gaps, ends too) or between (first and last at the edges).
+  String dockAlign;
 
   Timer? _save;
 
   static Future<Config> load(String dir) async {
+    final defaults = jsonDecode(await rootBundle.loadString('assets/defaults.json')) as Map<String, Object?>;
     for (final name in const ['config.json', 'config.json.bak']) {
       final file = File('$dir/$name');
       if (!await file.exists()) continue;
       try {
         final json = jsonDecode(await file.readAsString());
-        if (json is Map<String, Object?>) return Config._(dir, json, isNew: false);
+        if (json is Map<String, Object?>) return Config._(dir, _Values(json, defaults), isNew: false);
       } on FormatException {
         // Unreadable: try the backup, then start from defaults.
       }
     }
-    return Config._(dir, const {}, isNew: true);
+    return Config._(dir, _Values(const {}, defaults), isNew: true);
   }
 
   Map<String, Object?> toJson() => {
@@ -76,11 +129,25 @@ class Config extends ChangeNotifier {
     'gradient': gradient,
     'videoPath': videoPath,
     'imagePath': imagePath,
+    'pictureMinutes': pictureMinutes,
     'topIcons': topIcons,
     'topHidden': topHidden.toList(),
     'vpnApp': vpnApp,
     'clock24': clock24,
-    'blur': blur,
+    'showCaption': showCaption,
+    'aerialsOff': aerialsOff.toList(),
+    'aerialSpeed': aerialSpeed,
+    'aerialMinutes': aerialMinutes,
+    'aerialCache': aerialCache,
+    'dimming': dimming,
+    'glassBlur': glassBlur,
+    'glassTint': glassTint,
+    'glassTintAlpha': glassTintAlpha,
+    'lineWidth': lineWidth,
+    'lineAlpha': lineAlpha,
+    'dockSize': dockSize,
+    'tileShape': tileShape,
+    'dockAlign': dockAlign,
   };
 
   /// Call after changing any field: tells listeners and saves soon.
@@ -102,18 +169,36 @@ class Config extends ChangeNotifier {
     }
   }
 
-  static T? _get<T>(Map<String, Object?> json, String key) => json[key] is T ? json[key] as T : null;
-
-  static List<String> _strings(Object? value) => value is List
-      ? [
-          for (final v in value)
-            if (v is String) v,
-        ]
-      : [];
-
   /// The saved icon order without unknown ids, plus icons added since.
   static List<String> _iconOrder(List<String> saved) => [
     ...saved.where(topIconIds.contains),
     ...topIconIds.where((id) => !saved.contains(id)),
+  ];
+}
+
+/// Saved values over the defaults: each key takes its saved value when that
+/// has the right type, else its default.
+class _Values {
+  _Values(this.saved, this.defaults);
+
+  final Map<String, Object?> saved, defaults;
+
+  /// A saved null counts only when it was saved on purpose.
+  T get<T>(String key) => switch ((saved[key], defaults[key])) {
+    (final T value, _) when value != null || saved.containsKey(key) => value,
+    (_, final T value) => value,
+    _ => throw StateError('defaults.json has no $key'),
+  };
+
+  /// JSON writes 24.0 as 24, so any number counts.
+  double number(String key) => switch ((saved[key], defaults[key])) {
+    (final num value, _) || (_, final num value) => value.toDouble(),
+    _ => throw StateError('defaults.json has no $key'),
+  };
+
+  /// A list of strings, without anything else in it.
+  List<String> strings(String key) => [
+    for (final value in saved[key] is List ? saved[key]! as List : defaults[key] as List? ?? const [])
+      if (value is String) value,
   ];
 }

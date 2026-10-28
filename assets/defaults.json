@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "dock": [],
+  "hidden": [],
+  "wallpaper": "aerials",
+  "aerialQuality": "1080p",
+  "gradient": 2,
+  "videoPath": null,
+  "imagePath": null,
+  "pictureMinutes": 5,
+  "topIcons": [
+    "settings",
+    "network",
+    "vpn"
+  ],
+  "topHidden": [],
+  "vpnApp": null,
+  "clock24": true,
+  "showCaption": true,
+  "aerialsOff": [
+    "space",
+    "cities",
+    "landscapes"
+  ],
+  "aerialSpeed": 0.75,
+  "aerialMinutes": 0,
+  "aerialCache": true,
+  "dimming": 0.0,
+  "glassBlur": 8.0,
+  "glassTint": 4284107310,
+  "glassTintAlpha": 0.08,
+  "lineWidth": 1.0,
+  "lineAlpha": 0.12,
+  "dockSize": "small",
+  "tileShape": "square",
+  "dockAlign": "start"
+}

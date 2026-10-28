@@ -23,6 +23,16 @@ abstract final class Native {
   /// Path of the app's cached tile: a TV banner (".b.png") or an icon (".i.png").
   static Future<String?> tile(String package) => _main.invokeMethod<String>('tile', package);
 
+  /// Path of the app's icon filling a square (".s.png"), for rounded-square tiles.
+  static Future<String?> icon(String package) => _main.invokeMethod<String>('icon', package);
+
+  /// Storage to pick pictures from (the TV's own and any USB drives), once the
+  /// user allows reading pictures; null if they do not.
+  static Future<List<({String path, String name})>?> storage() async {
+    final volumes = await _main.invokeListMethod<Map<Object?, Object?>>('storage');
+    return volumes == null ? null : [for (final v in volumes) (path: v['path']! as String, name: v['name']! as String)];
+  }
+
   /// Launchable VPN apps as {package, name}.
   static Future<List<Map<Object?, Object?>>> vpnApps() async =>
       await _main.invokeListMethod<Map<Object?, Object?>>('vpnApps') ?? const [];
