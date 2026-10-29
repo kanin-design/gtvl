@@ -12,12 +12,23 @@ files are smaller builds for 64-bit and 32-bit Android.
   this repository's collection (downloaded when picked) or from the TV's
   storage, one or several, or whole folders, taking turns with a crossfade (a
   video loops seamlessly, for a set time when there are several); or a
-  gradient.
+  gradient. HDR films play on the TV's own video layer, in Dolby Vision where
+  the TV shows it.
 - **Dock:** a full-width glass bar of favourite apps; Down shows all other apps.
-  Apps show as wide TV banners or rounded squares, in three sizes, and the
-  glass (blur, tint, edge lines) is adjustable.
-- **Top bar:** hidden until Up; a second Up focuses it. Settings, network and
+  Apps show as wide TV banners or rounded squares, in five sizes, with
+  adjustable spacing, corners and height, and the glass (blur, tint, edge
+  lines) is adjustable.
+- **Rows of shows:** what you are watching and what is new, from Plex (signed
+  in with a code at plex.tv/link) and from apps that share rows with the home
+  screen, such as HBO Max and NRK TV, between the dock and all apps.
+- **Top bar:** hidden until Up, which moves into it. Settings, network and
   VPN icons, each optional and reorderable, plus the clock.
+- **Updates:** GTVL finds new versions in this repository's latest release,
+  downloads the APK for the TV and checks it (size, SHA-256, that it is GTVL,
+  newer, and signed with the same key) before Android installs it. With
+  automatic updates on, it looks every few hours; from Android 12 it then
+  installs as the TV goes to standby, and on older Android it waits under
+  Settings › About, where an update can also be checked for and installed.
 - **Buttons:** the remote's buttons (Netflix, ☰, Voice, media, volume, and
   Home and Back when held) can open an app, GTVL's settings or all apps, or do
   a system, media or volume action, separately for a press, a hold and a
@@ -34,9 +45,13 @@ files are smaller builds for 64-bit and 32-bit Android.
 Flutter 3.41.9 and JDK 17.
 
 ```bash
-flutter build apk --release --target-platform android-arm64
-adb install -r build/app/outputs/flutter-apk/app-release.apk
+flutter build apk --release --split-per-abi --target-platform android-arm64
+adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
+
+Split builds carry the version codes that updates use (2000 plus the build
+number for 64-bit, 1000 plus it for 32-bit); a TV that has updated itself
+refuses an all-in-one build of the same version as a downgrade.
 
 Release builds are signed with the key that `android/key.properties` names
 (kept out of git); without that file, with the debug key.
@@ -44,18 +59,29 @@ Release builds are signed with the key that `android/key.properties` names
 `tool/build.sh` builds the three release APKs into `dist/` (every TV, 32-bit
 and 64-bit Android) and refuses to without the release key; `--upload` puts them
 on the GitHub release for the version in `pubspec.yaml`, as a draft if it is new.
+It also writes `gtvl-update.json`, which TVs read from the latest release to
+update themselves, and `--notes FILE` adds release notes. To release: raise
+the version and build number in `pubspec.yaml`, run
+`tool/build.sh --upload --notes notes.md`, and publish the draft on GitHub;
+TVs skip drafts and pre-releases.
 
 ## Code
 
 `lib/` holds one concern per file: `native.dart` (the Android bridge),
 `config.dart` (settings as JSON), `apps.dart`, `status.dart`, `aerials.dart`,
 `media.dart` (pictures and videos from storage or the repository),
-`player.dart` (wallpaper video) and `buttons.dart` (button names, actions and
-remaps), then the UI: `home.dart`, `wallpaper.dart`, `tile.dart`,
-`menu.dart`, `settings.dart` and the shared parts in `ui.dart`.
+`player.dart` and `deck.dart` (wallpaper video, HDR beneath the screen),
+`plex.dart` and `channels.dart` (rows of shows from Plex and from other
+apps), `buttons.dart` (button names, actions and remaps) and `updates.dart`
+(GTVL's own updates), then the UI: `home.dart`, `wallpaper.dart`,
+`tile.dart`, `shows.dart`, `menu.dart`, `settings.dart` and the shared parts
+in `ui.dart`.
 `android/app/src/main/kotlin/kanin/gtvl/MainActivity.kt` lists apps, renders
 their tiles, launches them, and reports app, network and VPN changes;
-`ButtonService.kt`, an accessibility service, remaps the remote's buttons.
+`AppRows.kt` reads the rows other apps share; `HdrDeck.kt` plays HDR films
+on a video layer beneath the screen; `ButtonService.kt`, an accessibility
+service, remaps the remote's buttons; `Updater.kt` checks a downloaded update
+and hands it to Android's installer; `Launch.kt` starts apps.
 
 ## Config
 

@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
+import 'config.dart';
+import 'deck.dart';
 import 'media.dart';
 import 'native.dart';
 import 'player.dart';
@@ -35,28 +37,18 @@ class Wallpaper extends StatelessWidget {
         return Stack(
           fit: StackFit.expand,
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+            // See-through while an HDR film plays beneath the screen.
+            ValueListenableBuilder(
+              valueListenable: s.hdrBeneath,
+              builder: (context, beneath, gradient) => beneath ? const SizedBox.shrink() : gradient!,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+                ),
               ),
             ),
             if (config.wallpaper == 'aerials')
-              ScenePlayer(
-                // A new quality or choice of scenes starts over with matching films.
-                key: ValueKey('${config.aerialQuality} ${config.aerialsOff.join(',')}'),
-                speed: config.aerialSpeed,
-                maxLength: config.aerialMinutes > 0 ? Duration(minutes: config.aerialMinutes) : null,
-                next: (previous) => s.aerials.next(
-                  previous,
-                  config.aerialQuality,
-                  off: config.aerialsOff,
-                  useSaved: config.aerialCache,
-                ),
-                onShowing: (scene) {
-                  s.caption.value = scene.caption;
-                  if (config.aerialCache) s.aerials.remember(scene, config.aerialQuality);
-                },
-              )
+              _aerials(s, config)
             else if (config.wallpaper == 'video' && config.videos.isNotEmpty)
               VideoShow(sources: config.videos, shuffle: config.videoShuffle, loopMinutes: config.videoLoopMinutes)
             else if (config.wallpaper == 'image' && config.pictures.isNotEmpty)
@@ -72,6 +64,23 @@ class Wallpaper extends StatelessWidget {
       },
     );
   }
+}
+
+/// Apple's aerial films: drawn into the screen, or in HDR beneath it.
+Widget _aerials(Services s, Config config) {
+  // A new quality or choice of scenes starts over with matching films.
+  final key = ValueKey('${config.aerialQuality} ${config.aerialsOff.join(',')}');
+  final maxLength = config.aerialMinutes > 0 ? Duration(minutes: config.aerialMinutes) : null;
+  Scene? next(Scene? previous) =>
+      s.aerials.next(previous, config.aerialQuality, off: config.aerialsOff, useSaved: config.aerialCache);
+  void showing(Scene scene) {
+    s.caption.value = scene.caption;
+    if (config.aerialCache) s.aerials.remember(scene, config.aerialQuality);
+  }
+
+  return s.aerials.showsHdr(config.aerialQuality)
+      ? HdrScenePlayer(key: key, speed: config.aerialSpeed, maxLength: maxLength, next: next, onShowing: showing)
+      : ScenePlayer(key: key, speed: config.aerialSpeed, maxLength: maxLength, next: next, onShowing: showing);
 }
 
 /// The pictures [sources] stand for (picture files, and folders standing for
@@ -185,6 +194,9 @@ class VideoShow extends StatefulWidget {
 class _VideoShowState extends State<VideoShow> {
   List<String> _videos = const [];
 
+  /// Some of them are HDR, so all play beneath the screen.
+  bool _hdr = false;
+
   /// The choice being looked up, and the one [_videos] came from.
   String _choice = '', _found = '';
 
@@ -206,9 +218,11 @@ class _VideoShowState extends State<VideoShow> {
   Future<void> _load() async {
     final choice = _choice = widget._choice;
     final found = await Media.expand(widget.sources, MediaKind.videos);
+    final hdr = (await Future.wait(found.map(Native.isHdr))).any((isHdr) => isHdr);
     if (!mounted || choice != _choice) return;
     setState(() {
       _videos = found;
+      _hdr = hdr;
       _found = choice;
       _bag.clear();
     });
@@ -229,16 +243,16 @@ class _VideoShowState extends State<VideoShow> {
     } else {
       path = videos[(videos.indexOf(previous?.uri ?? '') + 1) % videos.length];
     }
-    return Scene(path, '', file: true, loop: videos.length == 1, hdr: await Native.isHdr(path));
+    return Scene(path, '', file: true, loop: videos.length == 1);
   }
 
   @override
-  Widget build(BuildContext context) => _videos.isEmpty
-      ? const SizedBox.shrink()
-      : ScenePlayer(
-          source: _found,
-          next: _next,
-          loop: widget.loopMinutes > 0,
-          maxLength: widget.loopMinutes > 0 ? Duration(minutes: widget.loopMinutes) : null,
-        );
+  Widget build(BuildContext context) {
+    if (_videos.isEmpty) return const SizedBox.shrink();
+    final loop = widget.loopMinutes > 0;
+    final maxLength = loop ? Duration(minutes: widget.loopMinutes) : null;
+    return _hdr
+        ? HdrScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength)
+        : ScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength);
+  }
 }

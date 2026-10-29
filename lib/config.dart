@@ -39,10 +39,16 @@ class Config extends ChangeNotifier {
       glassTintAlpha = v.number('glassTintAlpha'),
       lineWidth = v.number('lineWidth'),
       lineAlpha = v.number('lineAlpha'),
-      dockSize = v.get('dockSize'),
+      dockSize = _dockSize(v.get('dockSize')),
+      dockSpacing = v.number('dockSpacing'),
+      tileCorners = v.number('tileCorners'),
+      dockRoom = v.number('dockRoom'),
+      dockNames = v.get('dockNames'),
       tileShape = v.get('tileShape'),
       dockAlign = v.get('dockAlign'),
-      remotes = v.map('remotes');
+      remotes = v.map('remotes'),
+      showsOff = {...v.strings('showsOff')},
+      autoUpdate = v.get('autoUpdate');
 
   /// Icons the top bar can show, in their default order.
   static const topIconIds = ['settings', 'network', 'vpn'];
@@ -106,8 +112,17 @@ class Config extends ChangeNotifier {
   double lineWidth;
   double lineAlpha;
 
-  /// small, medium or large: how big the dock and app tiles are.
+  /// xs, s, m, l or xl: how big the dock and app tiles are.
   String dockSize;
+
+  /// The space between apps, how round their corners are, and the room
+  /// above and below them in the dock, each as a factor of the usual (1).
+  double dockSpacing;
+  double tileCorners;
+  double dockRoom;
+
+  /// The name of the dock app in focus shows under it.
+  bool dockNames;
 
   /// wide (TV banners) or square (icons in rounded squares).
   String tileShape;
@@ -119,6 +134,13 @@ class Config extends ChangeNotifier {
   /// What the remote's buttons do instead, by remote (see Remaps).
   final Map<String, Object?> remotes;
 
+  /// Rows of things to watch turned off (see Plex.rowNames).
+  final Set<String> showsOff;
+
+  /// Look for new versions of GTVL every few hours and get them ready; where
+  /// Android allows, install them at standby (see Updates).
+  bool autoUpdate;
+
   Timer? _save;
 
   static Future<Config> load(String dir) async {
@@ -129,8 +151,8 @@ class Config extends ChangeNotifier {
       try {
         final json = jsonDecode(await file.readAsString());
         if (json is Map<String, Object?>) return Config._(dir, _Values(json, defaults), isNew: false);
-      } on FormatException {
-        // Unreadable: try the backup, then start from defaults.
+      } on Exception {
+        // Unreadable (not JSON, not UTF-8, a read error): try the backup, then start from defaults.
       }
     }
     return Config._(dir, _Values(const {}, defaults), isNew: true);
@@ -165,9 +187,15 @@ class Config extends ChangeNotifier {
     'lineWidth': lineWidth,
     'lineAlpha': lineAlpha,
     'dockSize': dockSize,
+    'dockSpacing': dockSpacing,
+    'tileCorners': tileCorners,
+    'dockRoom': dockRoom,
+    'dockNames': dockNames,
     'tileShape': tileShape,
     'dockAlign': dockAlign,
     'remotes': remotes,
+    'showsOff': showsOff.toList(),
+    'autoUpdate': autoUpdate,
   };
 
   /// Call after changing any field: tells listeners and saves soon.
@@ -188,6 +216,10 @@ class Config extends ChangeNotifier {
       debugPrint('Could not save config: $e');
     }
   }
+
+  /// Sizes were small, medium and large, and small already looked medium:
+  /// each keeps its look under its new name.
+  static String _dockSize(String saved) => const {'small': 'm', 'medium': 'l', 'large': 'xl'}[saved] ?? saved;
 
   /// The saved icon order without unknown ids, plus icons added since.
   static List<String> _iconOrder(List<String> saved) => [

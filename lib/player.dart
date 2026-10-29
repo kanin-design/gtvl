@@ -6,7 +6,8 @@ import 'package:video_player/video_player.dart';
 
 import 'aerials.dart';
 
-/// Plays scenes back to back with a crossfade.
+/// Plays scenes back to back with a crossfade, drawn into GTVL's screen.
+/// HDR scenes play beneath it instead (see HdrScenePlayer).
 ///
 /// One video decodes at a time, except during a scene's last seconds while
 /// the next one buffers, and none at all while another app is in front, so
@@ -103,10 +104,13 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
-        if (_now == null) {
+        final now = _now;
+        if (now == null) {
           _start();
+        } else if (now.video.value.hasError) {
+          _start(now.scene);
         } else {
-          _now!.video.play();
+          now.video.play();
         }
       case AppLifecycleState.inactive:
         _now?.video.pause();
@@ -156,12 +160,9 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
         previous = scene;
         // A wallpaper must never take audio focus from what else is playing.
         final options = VideoPlayerOptions(mixWithOthers: true);
-        // Dolby Vision shows only on a real video surface; drawn into a
-        // texture, it comes out green. The glass can't blur such a surface.
-        final view = scene.hdr ? VideoViewType.platformView : VideoViewType.textureView;
         final video = scene.file
-            ? VideoPlayerController.file(File(scene.uri), videoPlayerOptions: options, viewType: view)
-            : VideoPlayerController.networkUrl(Uri.parse(scene.uri), videoPlayerOptions: options, viewType: view);
+            ? VideoPlayerController.file(File(scene.uri), videoPlayerOptions: options)
+            : VideoPlayerController.networkUrl(Uri.parse(scene.uri), videoPlayerOptions: options);
         try {
           await video.initialize();
           await video.setVolume(0);
@@ -218,9 +219,13 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
 
   void _tick() {
     final now = _now;
-    if (now == null || _fading || now.scene.loop) return;
+    if (now == null) return;
     final value = now.video.value;
-    if (!value.isInitialized || value.duration == Duration.zero) return;
+    if (value.hasError) {
+      _broke(now);
+      return;
+    }
+    if (_fading || now.scene.loop || !value.isInitialized || value.duration == Duration.zero) return;
     final max = widget.maxLength;
     // A looping scene runs out its time; any other ends with its video, or sooner.
     final left = widget.loop && max != null
@@ -233,14 +238,29 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
         if (run != _run || _now != now) {
           next?.video.dispose();
         } else if (next == null) {
-          now.video.setLooping(true); // nothing else would load: keep this one going
+          // Nothing else would load: keep this one going.
+          now.video.setLooping(true);
+          if (now.video.value.isCompleted) now.video.play();
         } else {
           _next = next;
+          // Ready only after this one ended or broke off, which ticks no more: change now.
+          if (now.video.value.isCompleted || now.video.value.hasError) _show(next);
         }
       });
     }
     final next = _next;
     if (next != null && (left <= _fade || value.isCompleted)) _show(next);
+  }
+
+  /// The scene playing broke off (the network dropped), and ticks no more:
+  /// the next one fades in as soon as it is ready, or one is looked for.
+  void _broke(_Layer now) {
+    final next = _next;
+    if (next != null) {
+      _show(next);
+    } else if (!_preparing) {
+      _start(now.scene);
+    }
   }
 
   @override

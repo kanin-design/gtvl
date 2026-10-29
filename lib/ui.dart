@@ -142,15 +142,29 @@ final smoothTraversal = ReadingOrderTraversalPolicy(
   },
 );
 
+/// Keeps Left and Right inside a row at its ends. With nothing beside the
+/// focused item, Flutter looks in other rows, even ones scrolled out of sight.
+KeyEventResult rowEnd(KeyEvent event, {required bool first, required bool last}) => switch (event.logicalKey) {
+  LogicalKeyboardKey.arrowLeft when first => KeyEventResult.handled,
+  LogicalKeyboardKey.arrowRight when last => KeyEventResult.handled,
+  _ => KeyEventResult.ignored,
+};
+
 /// Scrolls the nearest scrollable so [context] is fully in view with a margin.
-void reveal(BuildContext context, {double margin = 28}) {
+/// When the scrollable ends less than [endZone] further on, to the very end
+/// instead, so what follows the last row (a note) shows too.
+void reveal(BuildContext context, {double margin = 28, double endZone = 0}) {
   final box = context.findRenderObject();
   final position = Scrollable.maybeOf(context)?.position;
   if (box == null || position == null) return;
   final viewport = RenderAbstractViewport.of(box);
   final atStart = viewport.getOffsetToReveal(box, 0).offset - margin;
   final atEnd = viewport.getOffsetToReveal(box, 1).offset + margin;
-  final target = position.pixels > atStart ? atStart : (position.pixels < atEnd ? atEnd : null);
+  final target = position.maxScrollExtent - atEnd < endZone
+      ? position.maxScrollExtent
+      : position.pixels > atStart
+      ? atStart
+      : (position.pixels < atEnd ? atEnd : null);
   if (target == null) return;
   position.animateTo(
     target.clamp(position.minScrollExtent, position.maxScrollExtent),
@@ -182,16 +196,34 @@ class Glass extends StatelessWidget {
       decoration: BoxDecoration(color: tint, borderRadius: radius, border: border),
       child: child,
     );
+    // The same widgets with blur off: swapping them would rebuild everything
+    // inside, dock apps and their focus included.
     return ClipRRect(
       borderRadius: radius,
-      child: sigma > 0
-          ? BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-              child: body,
-            )
-          : body,
+      child: BackdropFilter(
+        enabled: sigma > 0,
+        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        child: body,
+      ),
     );
   }
+}
+
+/// A small dot on an icon's corner: something waits there, such as an update.
+class Badge extends StatelessWidget {
+  const Badge({super.key});
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.square(
+    dimension: 7,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: Look.white,
+        shape: BoxShape.circle,
+        boxShadow: [BoxShadow(color: Color(0x8C000000), blurRadius: 4)],
+      ),
+    ),
+  );
 }
 
 /// A one-pixel line, optionally starting [indent] in from the left.

@@ -2,13 +2,16 @@ import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
 import 'apps.dart';
+import 'channels.dart';
 import 'config.dart';
 import 'native.dart';
+import 'plex.dart';
 import 'status.dart';
+import 'updates.dart';
 
 /// Everything the UI shares, created once at start.
 class Services {
-  Services._(this.files, this.config, this.apps, this.status, this.aerials);
+  Services._(this.files, this.config, this.apps, this.status, this.aerials, this.plex, this.appRows, this.updates);
 
   /// The app's private folder, where downloaded wallpapers are kept.
   final String files;
@@ -18,8 +21,21 @@ class Services {
   final StatusModel status;
   final Aerials aerials;
 
+  /// Rows of things to watch from the user's Plex account.
+  final Plex plex;
+
+  /// Rows other apps share with the home screen.
+  final AppRows appRows;
+
+  /// New versions of GTVL, from its GitHub releases.
+  final Updates updates;
+
   /// What the wallpaper shows now, e.g. "Hawaii · Pu'u O 'Umi"; null when nothing to say.
   final caption = ValueNotifier<String?>(null);
+
+  /// An HDR film plays on the video layer beneath the screen, which then
+  /// leaves the wallpaper's place see-through.
+  final hdrBeneath = ValueNotifier(false);
 
   static Future<Services> start() async {
     // Asked first: listing the TV's decoders takes a moment.
@@ -30,7 +46,9 @@ class Services {
     final aerials = Aerials('${paths.cache}/aerial', hdr: await hdr);
     await aerials.load();
     final apps = AppsModel(config)..load();
-    return Services._(paths.files, config, apps, StatusModel(config), aerials);
+    final plex = Plex(paths.files)..load();
+    final updates = Updates(config, paths.cache)..start();
+    return Services._(paths.files, config, apps, StatusModel(config), aerials, plex, AppRows()..refresh(), updates);
   }
 
   static Services of(BuildContext context) => context.getInheritedWidgetOfExactType<Scope>()!.services;

@@ -90,9 +90,9 @@ class AppTile extends StatelessWidget {
           children: [
             AspectRatio(aspectRatio: square ? 1 : 16 / 9, child: tile),
             const SizedBox(height: 8),
-            // A name may reach a little past a narrow square.
+            // A name may reach a little past its tile, a narrow square's further.
             OverflowBox(
-              maxWidth: box.maxWidth * (square ? 1.8 : 1),
+              maxWidth: box.maxWidth * (square ? 1.8 : 1.4),
               fit: OverflowBoxFit.deferToChild,
               child: AnimatedOpacity(
                 opacity: focused ? 1 : 0,
@@ -140,25 +140,47 @@ class TileFace extends StatelessWidget {
     if (square) return const ColoredBox(color: _card);
     return ColoredBox(
       color: _card,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        child: Row(
-          children: [
-            if (path != null)
-              Image.file(File(path), width: 30, height: 30, cacheWidth: (30 * dpr).round())
-            else
-              const Icon(Icons.apps, size: 28, color: Look.dim),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                app.label,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Look.small.copyWith(color: Look.white),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          // On a narrow card the name goes under the icon, on one line: beside
+          // it, a word too long for the line would break in two.
+          final narrow = box.maxWidth < 170;
+          final height = box.maxHeight.isFinite ? box.maxHeight : box.maxWidth * 9 / 16;
+          final size = narrow ? (height * 0.34).clamp(12.0, 30.0) : 30.0;
+          final icon = path != null
+              ? Image.file(File(path), width: size, height: size, cacheWidth: (size * dpr).round())
+              : Icon(Icons.apps, size: size - 2, color: Look.dim);
+          final name = Text(
+            app.label,
+            maxLines: narrow ? 1 : 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: narrow ? TextAlign.center : TextAlign.start,
+            style: Look.small.copyWith(color: Look.white, fontSize: narrow ? (height * 0.2).clamp(9.0, 12.0) : null),
+          );
+          if (!narrow) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Row(
+                children: [
+                  icon,
+                  const SizedBox(width: 10),
+                  Expanded(child: name),
+                ],
               ),
+            );
+          }
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                icon,
+                SizedBox(height: height * 0.05),
+                name,
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

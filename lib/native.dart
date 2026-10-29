@@ -9,8 +9,9 @@ abstract final class Native {
 
   /// One shared stream of events: {type: apps}, {type: network, kind, online,
   /// vpn, signal}, {type: home}, {type: buttons} when the button service turns
-  /// on or off, and {type: open, what} when a remapped button asks for
-  /// GTVL's settings or all apps.
+  /// on or off, {type: open, what} when a remapped button asks for GTVL's
+  /// settings or all apps, {type: hdr, what} from the HDR video layer, and
+  /// {type: update, what, message} from Android's installer.
   static final Stream<Map<Object?, Object?>> events = _events.receiveBroadcastStream().map(
     (event) => event as Map<Object?, Object?>,
   );
@@ -83,6 +84,33 @@ abstract final class Native {
 
   static Future<bool> launch(String package) async => await _main.invokeMethod<bool>('launch', package) ?? false;
 
+  /// What other apps share with the home screen, as {watchNext: [...],
+  /// channels: [...]}; null while GTVL may not read TV listings.
+  static Future<Map<Object?, Object?>?> appRows() async {
+    try {
+      return await _main.invokeMapMethod<Object?, Object?>('appRows');
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Asks the user to let GTVL read TV listings; true once it may.
+  static Future<bool> allowTvListings() async => await _main.invokeMethod<bool>('allowTvListings') ?? false;
+
+  /// A picture an app shares by its own address, as a small file; null if
+  /// the app doesn't let GTVL read it.
+  static Future<String?> picture(String address) async {
+    try {
+      return await _main.invokeMethod<String>('picture', address);
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Opens [uri] in [package], e.g. a film in Plex; without that, the app itself.
+  static Future<bool> open(String uri, {String? package}) async =>
+      await _main.invokeMethod<bool>('open', {'uri': uri, 'package': package}) ?? false;
+
   static Future<void> appInfo(String package) => _main.invokeMethod('appInfo', package);
 
   static Future<void> uninstall(String package) => _main.invokeMethod('uninstall', package);
@@ -124,6 +152,61 @@ abstract final class Native {
   /// page the TV has.
   static Future<void> buttonSettings() => _main.invokeMethod('buttonSettings');
 
+  /// Plays an HDR film on the video layer beneath GTVL's screen (Android's
+  /// HdrDeck), replacing anything there; [loop] plays it, and any queued
+  /// after it, over and over.
+  static Future<void> hdrPlay(String uri, {bool loop = false, double speed = 1}) =>
+      _main.invokeMethod('hdrPlay', {'uri': uri, 'loop': loop, 'speed': speed});
+
+  /// Changes how the HDR film playing, and any queued after it, play.
+  static Future<void> hdrAdjust({required bool loop, required double speed}) =>
+      _main.invokeMethod('hdrAdjust', {'loop': loop, 'speed': speed});
+
+  /// Loads an HDR film to follow the one playing, without a gap.
+  static Future<void> hdrQueue(String uri) => _main.invokeMethod('hdrQueue', uri);
+
+  /// Moves on to the film queued next.
+  static Future<void> hdrSkip() => _main.invokeMethod('hdrSkip');
+  static Future<void> hdrPause() => _main.invokeMethod('hdrPause');
+  static Future<void> hdrResume() => _main.invokeMethod('hdrResume');
+
+  /// Lets go of the HDR video layer and its decoder.
+  static Future<void> hdrStop() => _main.invokeMethod('hdrStop');
+
   /// Opens a system settings screen, e.g. "android.settings.WIFI_SETTINGS".
   static Future<void> openSettings([String? action]) => _main.invokeMethod('settings', action);
+
+  /// This copy of GTVL, and what Android allows for its updates: [allowed]
+  /// to install apps at all (the user's switch), and [quiet] updates of
+  /// itself without asking (Android 12 on). [room]: free bytes for a download.
+  static Future<({String version, int build, List<String> abis, bool allowed, bool quiet, int room})>
+  updateInfo() async {
+    final info = await _main.invokeMapMethod<String, Object?>('updateInfo') ?? const {};
+    return (
+      version: info['version'] as String? ?? '',
+      build: info['build'] as int? ?? 0,
+      abis: [...?(info['abis'] as List?)?.whereType<String>()],
+      allowed: info['allowed'] == true,
+      quiet: info['quiet'] == true,
+      room: info['room'] as int? ?? 0,
+    );
+  }
+
+  /// Why the downloaded update at [path] must not be installed: "size",
+  /// "checksum", "unreadable", "package", "older", "android" or "signer"
+  /// (see Updater.check). Null if it may.
+  static Future<String?> checkUpdate(String path, {required int size, required String sha256}) =>
+      _main.invokeMethod<String>('checkUpdate', {'path': path, 'size': size, 'sha256': sha256});
+
+  /// Hands the checked update at [path] to Android's installer, which asks
+  /// the user unless GTVL may update itself. Its answers come as events,
+  /// {type: update, what, message}; once it's in, GTVL starts again.
+  static Future<void> installUpdate(String path) => _main.invokeMethod('installUpdate', path);
+
+  /// Has the checked update at [path] install as the TV next goes to
+  /// standby, without asking; null calls that off.
+  static Future<void> updateAtStandby(String? path) => _main.invokeMethod('updateAtStandby', path);
+
+  /// Opens Android's switch that lets GTVL install apps, for its own updates.
+  static Future<bool> allowUpdates() async => await _main.invokeMethod<bool>('allowUpdates') ?? false;
 }

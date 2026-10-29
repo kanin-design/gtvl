@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -9,23 +10,36 @@ import 'menu.dart';
 import 'native.dart';
 import 'services.dart';
 import 'settings.dart';
+import 'shows.dart';
 import 'tile.dart';
 import 'ui.dart';
 import 'wallpaper.dart';
 
 /// Sizes derived from the screen, so the layout fits any TV.
 class _Geometry {
-  _Geometry(Size size, {required String dockSize, required this.square})
-    : width = size.width,
-      height = size.height,
-      pad = (size.width * 0.04).roundToDouble(),
-      columns = (square ? _squareColumns : _columns)[dockSize] ?? (square ? 10 : 6) {
-    gap = (width * 0.014).roundToDouble();
-    tileWidth = (width - 2 * pad - (columns - 1) * gap) / columns;
+  _Geometry(
+    Size size, {
+    required String dockSize,
+    required this.square,
+    double spacing = 1,
+    double corners = 1,
+    double room = 1,
+    bool names = false,
+  }) : width = size.width,
+       height = size.height,
+       pad = (size.width * 0.04).roundToDouble(),
+       columns = (square ? _squareColumns : _columns)[dockSize] ?? (square ? 13 : 8) {
+    // Tiles keep their size whatever the spacing: it widens or narrows only the gaps.
+    baseGap = (width * 0.014).roundToDouble();
+    gap = (baseGap * spacing).roundToDouble();
+    tileWidth = (width - 2 * pad - (columns - 1) * baseGap) / columns;
     tileHeight = square ? tileWidth : tileWidth * 9 / 16;
-    radius = square ? (tileWidth * 0.225).roundToDouble() : 10;
-    // Room above and below a tile for its focus lift and shadow.
-    dockHeight = tileHeight * 1.36;
+    // All apps: as many columns as fit at that size and spacing, from the left.
+    gridColumns = ((width - 2 * pad + gap) / (tileWidth + gap)).floor().clamp(1, 99);
+    gridEnd = width - pad - gridColumns * tileWidth - (gridColumns - 1) * gap;
+    radius = ((square ? tileWidth * 0.225 : 10) * corners).clamp(0, tileHeight / 2).roundToDouble();
+    // Room above and below a tile for its focus lift and shadow, and its name when shown.
+    dockHeight = tileHeight * (1 + 0.36 * room) + (names ? labelHeight : 0);
     dockIdle = height - dockHeight - height * 0.07;
     dockTop = height * 0.06;
     gridTop = dockTop + dockHeight + height * 0.02;
@@ -33,13 +47,21 @@ class _Geometry {
 
   /// Tiles per row, by dock size: smaller tiles fit more. Squares are
   /// narrower, so more of them fit at about the same height.
-  static const _columns = {'small': 8, 'medium': 6, 'large': 5};
-  static const _squareColumns = {'small': 13, 'medium': 10, 'large': 8};
+  static const _columns = {'xs': 12, 's': 10, 'm': 8, 'l': 6, 'xl': 5};
+  static const _squareColumns = {'xs': 20, 's': 16, 'm': 13, 'l': 10, 'xl': 8};
   static const labelHeight = 26.0;
   final bool square;
   final int columns;
+  late final int gridColumns;
   final double width, height, pad;
-  late final double gap, tileWidth, tileHeight, radius, dockHeight, dockIdle, dockTop, gridTop;
+
+  /// The gap at medium spacing, which sets the tiles' size and the rows of
+  /// shows; [gap] is the one the user chose, between apps.
+  late final double baseGap, gap;
+
+  /// The all-apps grid's padding on the right, so its tiles keep their size.
+  late final double gridEnd;
+  late final double tileWidth, tileHeight, radius, dockHeight, dockIdle, dockTop, gridTop;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -57,11 +79,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late final _eased = CurvedAnimation(parent: _page, curve: Curves.easeInOutCubic);
   final _dock = FocusScopeNode(debugLabel: 'dock');
   final _grid = FocusScopeNode(debugLabel: 'grid');
+  final _gridScroll = ScrollController();
   final _bar = FocusScopeNode(debugLabel: 'bar');
 
-  /// The top bar is on screen: revealed by Up from the dock, or focused.
+  /// The top bar is on screen: while it has focus.
   final _barShown = ValueNotifier(false);
-  Timer? _conceal;
 
   /// The dock app being moved, if any.
   String? _moving;
@@ -89,77 +111,103 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void dispose() {
     _homeKey?.cancel();
     _opens?.cancel();
-    _conceal?.cancel();
     _eased.dispose();
     _page.dispose();
     _dock.dispose();
     _grid.dispose();
+    _gridScroll.dispose();
     _bar.dispose();
     _barShown.dispose();
     super.dispose();
   }
 
-  /// Focuses the item last focused in [scope], or its first one.
-  void _enter(FocusScopeNode scope) {
-    final target = scope.focusedChild ?? (scope.traversalDescendants.isEmpty ? null : scope.traversalDescendants.first);
-    target?.requestFocus();
+  /// Focuses the item last focused in [scope], or its top-left one; with
+  /// [first], always its top-left one, once the frame that brings it in view
+  /// has laid it out.
+  void _enter(FocusScopeNode scope, {bool first = false}) {
+    if (!first) {
+      (scope.focusedChild ?? _topLeft(scope))?.requestFocus();
+      return;
+    }
+    SchedulerBinding.instance
+      ..addPostFrameCallback((_) => _topLeft(scope)?.requestFocus())
+      ..scheduleFrame();
+  }
+
+  /// [scope]'s item nearest the top left, as the eye reads it, among those
+  /// on screen across: a row of shows scrolled sideways keeps cards built
+  /// out of sight. The focus tree's own order is the order items were built
+  /// in: rows of shows load after the apps below them.
+  FocusNode? _topLeft(FocusScopeNode scope) {
+    final width = MediaQuery.sizeOf(context).width;
+    final nodes = scope.traversalDescendants;
+    final across = nodes.where((node) => node.rect.left >= 0 && node.rect.right <= width);
+    return (across.isEmpty ? nodes : across).fold<FocusNode?>(null, (best, node) {
+      if (best == null) return node;
+      final (a, b) = (node.rect, best.rect);
+      if ((a.top - b.top).abs() > 1) return a.top < b.top ? node : best;
+      return a.left < b.left ? node : best;
+    });
+  }
+
+  /// Focuses [package]'s tile in [scope], if it is built.
+  void _focusTile(FocusScopeNode scope, String package) {
+    final node = scope.traversalDescendants
+        .where((node) => node.context?.findAncestorWidgetOfExactType<AppTile>()?.app.package == package)
+        .firstOrNull;
+    node?.requestFocus();
+    if (node?.context case final context?) reveal(context);
   }
 
   void _goHome({bool closeMenus = false}) {
     if (closeMenus) Navigator.of(context).popUntil((route) => route.isFirst);
     if (_moving != null) setState(() => _moving = null);
-    _hideBar();
     _enter(s.apps.dock.isEmpty ? _grid : _dock);
   }
 
-  void _revealBar() {
-    _barShown.value = true;
-    _conceal?.cancel();
-    _conceal = Timer(const Duration(seconds: 5), _hideBar);
-  }
-
-  void _hideBar() {
-    _conceal?.cancel();
-    if (!_bar.hasFocus) _barShown.value = false;
-  }
-
   static bool _isPress(KeyEvent event) => event is KeyDownEvent || event is KeyRepeatEvent;
+
+  /// The home screen is the top screen. A tile built behind a menu, as a
+  /// settings change can rebuild them, must not take the menu's focus.
+  bool get _onTop => ModalRoute.isCurrentOf(context) ?? true;
 
   KeyEventResult _onDockKey(FocusNode node, KeyEvent event) {
     if (_moving != null || !_isPress(event)) return KeyEventResult.ignored;
     switch (event.logicalKey) {
       case LogicalKeyboardKey.arrowUp:
-        // The first Up shows the top bar; the next one moves into it.
-        if (event is KeyDownEvent) {
-          if (_barShown.value) {
-            _enter(_bar);
-          } else {
-            _revealBar();
-          }
-        }
+        // Up goes into the top bar, always at its first icon (the gear, unless moved).
+        if (event is KeyDownEvent) _enter(_bar, first: true);
         return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowDown:
-        _hideBar();
-        if (event is KeyDownEvent) _enter(_grid);
+        // Down always starts at the top: the first row of shows, else the first app.
+        if (event is KeyDownEvent) {
+          if (_gridScroll.hasClients) _gridScroll.jumpTo(0);
+          _enter(_grid, first: true);
+        }
         return KeyEventResult.handled;
       default:
-        _hideBar();
         return KeyEventResult.ignored;
     }
   }
 
   KeyEventResult _onGridKey(FocusNode node, KeyEvent event) {
     if (!_isPress(event) || event.logicalKey != LogicalKeyboardKey.arrowUp) return KeyEventResult.ignored;
-    // Up from the top row goes back to the dock.
+    // Up from the top row goes back to the dock; with no apps in it, to the top bar.
     final moved = FocusManager.instance.primaryFocus?.focusInDirection(TraversalDirection.up) ?? false;
-    if (!moved && event is KeyDownEvent) _enter(_dock);
+    if (!moved && event is KeyDownEvent) {
+      if (s.apps.dock.isEmpty) {
+        _enter(_bar, first: true);
+      } else {
+        _enter(_dock);
+      }
+    }
     return KeyEventResult.handled;
   }
 
   KeyEventResult _onBarKey(FocusNode node, KeyEvent event) {
     if (!_isPress(event)) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-      if (event is KeyDownEvent) _enter(_dock);
+      if (event is KeyDownEvent) _enter(s.apps.dock.isEmpty ? _grid : _dock);
       return KeyEventResult.handled;
     }
     return event.logicalKey == LogicalKeyboardKey.arrowUp ? KeyEventResult.handled : KeyEventResult.ignored;
@@ -167,6 +215,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   /// Keys for the dock app being moved: Left and Right move it, OK or Back puts it down.
   KeyEventResult _onMoveKey(KeyEvent event) {
+    // Back, down and up alike, goes on to PopScope, which puts it down.
+    if (event.logicalKey == LogicalKeyboardKey.goBack) return KeyEventResult.ignored;
     if (!_isPress(event)) return KeyEventResult.handled;
     final package = _moving!;
     switch (event.logicalKey) {
@@ -194,11 +244,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _menu(AppInfo app) => showAppMenu(
-    context,
-    app,
-    onMove: s.apps.inDock(app.package) ? () => setState(() => _moving = app.package) : null,
-  );
+  /// The app menu. An app that leaves its list there (hidden, or moved
+  /// between the dock and all apps) hands focus to the app now in its place.
+  Future<void> _menu(AppInfo app) async {
+    final inDock = s.apps.inDock(app.package);
+    List<AppInfo> list() => inDock ? s.apps.dock : s.apps.others;
+    final at = list().indexWhere((other) => other.package == app.package);
+    await showAppMenu(context, app, onMove: inDock ? () => setState(() => _moving = app.package) : null);
+    final now = list();
+    if (!mounted || at < 0 || now.isEmpty || now.any((other) => other.package == app.package)) return;
+    final next = now[at.clamp(0, now.length - 1)].package;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _onTop) _focusTile(inDock ? _dock : _grid, next);
+    });
+  }
 
   @override
   Widget build(BuildContext context) => PopScope(
@@ -211,7 +270,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       listenable: s.config,
       builder: (context, _) => LayoutBuilder(
         builder: (context, box) {
-          final g = _Geometry(box.biggest, dockSize: s.config.dockSize, square: s.config.tileShape == 'square');
+          final c = s.config;
+          final g = _Geometry(
+            box.biggest,
+            dockSize: c.dockSize,
+            square: c.tileShape == 'square',
+            spacing: c.dockSpacing,
+            corners: c.tileCorners,
+            room: c.dockRoom,
+            names: c.dockNames,
+          );
           final eased = _eased;
           return Stack(
             fit: StackFit.expand,
@@ -225,7 +293,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ),
               ListenableBuilder(
-                listenable: Listenable.merge([s.apps, s.config]),
+                listenable: Listenable.merge([s.apps, s.config, s.plex, s.appRows]),
                 builder: (context, _) => Stack(
                   children: [
                     Positioned(
@@ -258,6 +326,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             Transform.translate(offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)), child: dock),
                       ),
                     ),
+                    if (_moving != null)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: g.dockIdle - 46,
+                        child: const Center(child: _MoveHint()),
+                      ),
                   ],
                 ),
               ),
@@ -308,12 +383,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               padding: EdgeInsets.symmetric(horizontal: g.gap / 2),
                               child: SizedBox(
                                 width: g.tileWidth,
-                                height: g.tileHeight,
+                                height: g.tileHeight + (c.dockNames ? _Geometry.labelHeight : 0),
                                 child: AppTile(
                                   app: apps[i],
                                   square: g.square,
                                   radius: g.radius,
-                                  autofocus: i == 0,
+                                  label: c.dockNames,
+                                  autofocus: i == 0 && _onTop,
                                   moving: _moving == apps[i].package,
                                   onKey: _moving == apps[i].package ? _onMoveKey : null,
                                   onLaunch: () => Native.launch(apps[i].package),
@@ -338,8 +414,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     'between': MainAxisAlignment.spaceBetween,
   };
 
+  /// Below the dock: rows of things to watch, then every other app.
   Widget _gridView(_Geometry g) {
     final apps = s.apps.others;
+    // What is being watched first, Plex and then each app; then what is new; then apps' own channels.
+    final plex = {for (final row in s.plex.rows) row.id: row};
+    final rows = [
+      ?plex['plex.continue'],
+      ...s.appRows.watching,
+      ?plex['plex.recent'],
+      ...s.appRows.channels,
+    ].where((row) => row.items.isNotEmpty && !s.config.showsOff.contains(row.id)).toList();
     return FocusScope(
       node: _grid,
       onKeyEvent: _onGridKey,
@@ -348,25 +433,63 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       },
       child: FocusTraversalGroup(
         policy: smoothTraversal,
-        child: GridView.builder(
-          padding: EdgeInsets.fromLTRB(g.pad, 18, g.pad, 60),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: g.columns,
-            crossAxisSpacing: g.gap,
-            mainAxisSpacing: g.gap * 0.6,
-            childAspectRatio: g.tileWidth / (g.tileHeight + _Geometry.labelHeight),
-          ),
-          itemCount: apps.length,
-          itemBuilder: (context, i) => AppTile(
-            key: ValueKey(apps[i].package),
-            app: apps[i],
-            square: g.square,
-            radius: g.radius,
-            label: true,
-            autofocus: i == 0 && s.apps.dock.isEmpty,
-            onLaunch: () => Native.launch(apps[i].package),
-            onMenu: () => _menu(apps[i]),
-          ),
+        child: CustomScrollView(
+          controller: _gridScroll,
+          slivers: [
+            for (final row in rows)
+              // Keyed here, among the slivers: a row added above keeps those below as they are.
+              SliverToBoxAdapter(
+                key: ValueKey(row.id),
+                child: ShowRow(
+                  row: row,
+                  pad: g.pad,
+                  gap: g.baseGap,
+                  cardWidth: (g.width - 2 * g.pad - 3 * g.baseGap) / 4,
+                  onOpen: (item) => Native.open(item.link, package: item.app),
+                ),
+              ),
+            if (rows.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(g.pad, 6, g.pad, 0),
+                  child: Text('All apps', style: Look.label.copyWith(fontSize: 15, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(g.pad, 18, g.gridEnd, 60),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: g.gridColumns,
+                  crossAxisSpacing: g.gap,
+                  mainAxisSpacing: g.gap * 0.6,
+                  childAspectRatio: g.tileWidth / (g.tileHeight + _Geometry.labelHeight),
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  childCount: apps.length,
+                  // Tiles keep their place in the focus tree when apps before them come or go.
+                  findChildIndexCallback: (key) {
+                    final i = key is ValueKey<String> ? apps.indexWhere((app) => app.package == key.value) : -1;
+                    return i < 0 ? null : i;
+                  },
+                  (context, i) => AppTile(
+                    key: ValueKey(apps[i].package),
+                    app: apps[i],
+                    square: g.square,
+                    radius: g.radius,
+                    label: true,
+                    autofocus: i == 0 && s.apps.dock.isEmpty && _onTop,
+                    onKey: (event) => rowEnd(
+                      event,
+                      first: i % g.gridColumns == 0,
+                      last: i % g.gridColumns == g.gridColumns - 1 || i == apps.length - 1,
+                    ),
+                    onLaunch: () => Native.launch(apps[i].package),
+                    onMenu: () => _menu(apps[i]),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -375,14 +498,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget _topBar() => FocusScope(
     node: _bar,
     onKeyEvent: _onBarKey,
-    onFocusChange: (focused) {
-      if (focused) {
-        _conceal?.cancel();
-        _barShown.value = true;
-      } else {
-        _barShown.value = false;
-      }
-    },
+    onFocusChange: (focused) => _barShown.value = focused,
     child: ValueListenableBuilder<bool>(
       valueListenable: _barShown,
       builder: (context, shown, bar) => AnimatedOpacity(
@@ -396,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
       ),
       child: ListenableBuilder(
-        listenable: Listenable.merge([s.config, s.status]),
+        listenable: Listenable.merge([s.config, s.status, s.updates]),
         builder: (context, _) => Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -429,9 +545,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       case 'settings':
         // Always there so Up can reach it: a hidden gear shows only while
         // focused, so settings can never be locked away.
-        return TopIcon(icon: Icons.settings_outlined, collapsed: hidden, onPressed: () => showSettings(context));
+        return TopIcon(
+          key: ValueKey(id),
+          icon: Icons.settings_outlined,
+          collapsed: hidden,
+          // An update waits in settings, under About.
+          badge: s.updates.waiting,
+          onPressed: () => showSettings(context),
+        );
       case 'network' when !hidden:
         return TopIcon(
+          key: ValueKey(id),
           icon: s.status.networkIcon,
           onPressed: () => Native.openSettings('android.settings.WIFI_SETTINGS'),
         );
@@ -439,6 +563,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         final app = s.status.vpnApp;
         if (app == null) return null;
         return TopIcon(
+          key: ValueKey(id),
           icon: s.status.vpn ? Icons.vpn_lock : Icons.vpn_lock_outlined,
           dim: !s.status.vpn,
           onPressed: () => Native.launch(app.package),
@@ -448,9 +573,30 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 }
 
+/// What the keys do while a dock app is being moved; Back puts it down too.
+class _MoveHint extends StatelessWidget {
+  const _MoveHint();
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(color: const Color(0xB3000000), borderRadius: BorderRadius.circular(16)),
+    child: const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      child: Text('Left and Right move it · OK when done', style: Look.label),
+    ),
+  );
+}
+
 /// A top-bar icon. Focus brightens and enlarges it and puts a dot under it.
 class TopIcon extends StatelessWidget {
-  const TopIcon({super.key, required this.icon, required this.onPressed, this.dim = false, this.collapsed = false});
+  const TopIcon({
+    super.key,
+    required this.icon,
+    required this.onPressed,
+    this.dim = false,
+    this.collapsed = false,
+    this.badge = false,
+  });
 
   final IconData icon;
   final VoidCallback onPressed;
@@ -460,6 +606,9 @@ class TopIcon extends StatelessWidget {
 
   /// Takes no space until focused.
   final bool collapsed;
+
+  /// A dot on its corner: something waits behind it.
+  final bool badge;
 
   @override
   Widget build(BuildContext context) => Pressable(
@@ -474,11 +623,17 @@ class TopIcon extends StatelessWidget {
               scale: focused ? 1.2 : 1,
               duration: Look.fast,
               curve: Look.ease,
-              child: Icon(
-                this.icon,
-                size: 22,
-                color: Look.white.withValues(alpha: focused ? 1 : (dim ? 0.5 : 0.8)),
-                shadows: Look.shadow,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    this.icon,
+                    size: 22,
+                    color: Look.white.withValues(alpha: focused ? 1 : (dim ? 0.5 : 0.8)),
+                    shadows: Look.shadow,
+                  ),
+                  if (badge) const Positioned(right: -3, top: -2, child: Badge()),
+                ],
               ),
             ),
             const SizedBox(height: 7),

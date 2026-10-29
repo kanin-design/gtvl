@@ -6,13 +6,16 @@ import 'config.dart';
 import 'native.dart';
 
 class AppInfo {
-  AppInfo(this.package, this.label, {required this.tv, required this.version});
+  AppInfo(this.package, this.label, {required this.tv, required this.version, this.system = false});
 
   final String package;
   final String label;
 
   /// Has a TV (leanback) entry, so usually a banner.
   final bool tv;
+
+  /// Built into the TV, so it can't be uninstalled.
+  final bool system;
 
   /// Last update time: a changed app gets a fresh tile.
   final int version;
@@ -35,7 +38,8 @@ class AppInfo {
 class AppsModel extends ChangeNotifier {
   AppsModel(this._config) {
     // An install sends several package events at once: reload once after them.
-    Native.events.where((event) => event['type'] == 'apps').listen((_) {
+    Native.events.where((event) => event['type'] == 'apps').listen((event) {
+      if (event['removed'] case final String package) _removed.add(package);
       _reload?.cancel();
       _reload = Timer(const Duration(milliseconds: 300), load);
     });
@@ -43,6 +47,11 @@ class AppsModel extends ChangeNotifier {
 
   final Config _config;
   Timer? _reload;
+
+  /// Apps uninstalled since the last load. Only these leave the dock and the
+  /// hidden apps; one missing for a moment (being updated, or on a drive not
+  /// mounted yet) keeps its place.
+  final _removed = <String>{};
   Map<String, AppInfo> _apps = const {};
   bool loaded = false;
 
@@ -64,7 +73,13 @@ class AppsModel extends ChangeNotifier {
   Future<void> load() async {
     final found = [
       for (final m in await Native.apps())
-        AppInfo(m['package']! as String, m['label']! as String, tv: m['tv'] == true, version: m['version']! as int),
+        AppInfo(
+          m['package']! as String,
+          m['label']! as String,
+          tv: m['tv'] == true,
+          version: m['version']! as int,
+          system: m['system'] == true,
+        ),
     ]..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
     if (found.isEmpty) return; // a failed query must never empty the dock
     final old = _apps;
@@ -78,8 +93,10 @@ class AppsModel extends ChangeNotifier {
       configChanged = true;
     }
     final before = _config.dock.length + _config.hidden.length;
-    _config.dock.removeWhere((package) => !_apps.containsKey(package));
-    _config.hidden.removeWhere((package) => !_apps.containsKey(package));
+    bool gone(String package) => _removed.contains(package) && !_apps.containsKey(package);
+    _config.dock.removeWhere(gone);
+    _config.hidden.removeWhere(gone);
+    _removed.clear();
     if (configChanged || _config.dock.length + _config.hidden.length != before) _config.changed();
 
     loaded = true;
@@ -104,15 +121,17 @@ class AppsModel extends ChangeNotifier {
     _changed();
   }
 
-  /// Moves a dock app [by] places, staying inside the dock.
+  /// Moves a dock app one place left ([by] -1) or right (1), staying inside
+  /// the dock. Apps missing for now keep their places.
   void move(String package, int by) {
     final dock = _config.dock;
-    final from = dock.indexOf(package);
+    final shown = dock.where(_apps.containsKey).toList();
+    final from = shown.indexOf(package);
     final to = from + by;
-    if (from < 0 || to < 0 || to >= dock.length) return;
-    dock
-      ..removeAt(from)
-      ..insert(to, package);
+    if (from < 0 || to < 0 || to >= shown.length) return;
+    final (i, j) = (dock.indexOf(package), dock.indexOf(shown[to]));
+    dock[i] = shown[to];
+    dock[j] = package;
     _changed();
   }
 

@@ -7,6 +7,16 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Rows other apps share with the home screen, such as what is being watched in each. -->
+    <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
+    <!--
+      GTVL's own updates, from its GitHub releases, through Android's installer: the user allows
+      it once, and from Android 12 GTVL may update itself without asking each time. The wake lock
+      keeps the TV up for the minute an update installs as it goes to standby.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -38,7 +48,7 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape"
             android:theme="@style/LaunchTheme"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|colorMode|navigation|touchscreen"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
             <meta-data
@@ -68,6 +78,12 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/buttons" />
         </service>
+        <!-- The installer's answers to an update, and GTVL starting again after one. -->
+        <receiver android:name=".UpdateReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <meta-data android:name="flutterEmbedding" android:value="2" />
         <!-- Skia: Impeller (Vulkan) shows video in red and black on the Shield. -->
         <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false" />

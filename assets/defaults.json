@@ -34,8 +34,14 @@
   "glassTintAlpha": 0.08,
   "lineWidth": 1.0,
   "lineAlpha": 0.12,
-  "dockSize": "small",
+  "dockSize": "m",
+  "dockSpacing": 1.0,
+  "tileCorners": 1.0,
+  "dockRoom": 1.0,
+  "dockNames": false,
   "tileShape": "square",
   "dockAlign": "start",
-  "remotes": {}
+  "remotes": {},
+  "showsOff": [],
+  "autoUpdate": true
 }

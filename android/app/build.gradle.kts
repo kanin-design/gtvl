@@ -57,3 +57,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // HdrDeck's player: the same Media3 that video_player brings.
+    implementation("androidx.media3:media3-exoplayer:1.9.2")
+}

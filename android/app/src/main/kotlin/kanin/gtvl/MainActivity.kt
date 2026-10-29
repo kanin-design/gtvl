@@ -1,8 +1,12 @@
 package kanin.gtvl
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
@@ -23,18 +27,24 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.os.UserHandle
 import android.os.storage.StorageManager
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.Display
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterActivityLaunchConfigs.BackgroundMode
+import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -55,6 +65,22 @@ class MainActivity : FlutterActivity() {
     private val launcherApps by lazy { getSystemService(LauncherApps::class.java) }
     private var events: EventChannel.EventSink? = null
 
+    /** HDR wallpaper films, on a video layer beneath GTVL's screen. */
+    private val deck by lazy { HdrDeck(this) { events?.success(it) } }
+
+    private val updater by lazy { Updater(this) }
+    private val prefs by lazy { Updater.prefs(this) }
+
+    /** A checked update to install as the TV goes to standby, without asking (Android 12 on). */
+    private var standbyUpdate: String? = null
+
+    // GTVL's screen draws see-through where an HDR film shows beneath it
+    // (HdrDeck), still on a surface of its own: Flutter's texture mode would
+    // cost a copy of every frame.
+    override fun getBackgroundMode() = BackgroundMode.transparent
+
+    override fun getRenderMode() = RenderMode.surface
+
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         val messenger = engine.dartExecutor.binaryMessenger
@@ -72,6 +98,10 @@ class MainActivity : FlutterActivity() {
                 "isHdr" -> inBackground(result) { isHdr(arg!!) }
                 "canPlay" -> inBackground(result) { canPlay(arg!!) }
                 "launch" -> result.success(launchApp(arg!!))
+                "open" -> result.success(openLink(call.argument<String>("uri")!!, call.argument<String>("package")))
+                "appRows" -> inBackground(result) { appRows() }
+                "picture" -> inBackground(result) { picture(arg!!) }
+                "allowTvListings" -> allowTvListings(result)
                 "appInfo" -> result.success(startNew(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$arg"))))
                 "uninstall" -> result.success(startNew(Intent(Intent.ACTION_DELETE, Uri.parse("package:$arg"))))
                 "settings" -> result.success(startNew(Intent(arg ?: Settings.ACTION_SETTINGS)))
@@ -89,37 +119,193 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "buttonSettings" -> result.success(buttonSettings())
+                "hdrPlay" -> {
+                    deck.play(call.argument("uri")!!, call.argument("loop") ?: false, (call.argument<Double>("speed") ?: 1.0).toFloat())
+                    result.success(null)
+                }
+                "hdrAdjust" -> {
+                    deck.adjust(call.argument("loop") ?: false, (call.argument<Double>("speed") ?: 1.0).toFloat())
+                    result.success(null)
+                }
+                "hdrQueue" -> {
+                    deck.queue(arg!!)
+                    result.success(null)
+                }
+                "hdrSkip" -> {
+                    deck.skip()
+                    result.success(null)
+                }
+                "hdrPause" -> {
+                    deck.pause()
+                    result.success(null)
+                }
+                "hdrResume" -> {
+                    deck.resume()
+                    result.success(null)
+                }
+                "hdrStop" -> {
+                    deck.stop()
+                    result.success(null)
+                }
+                "updateInfo" -> result.success(updater.about())
+                "checkUpdate" -> inBackground(result) {
+                    updater.check(call.argument("path")!!, call.argument<Number>("size")!!.toLong(), call.argument("sha256")!!)
+                }
+                "installUpdate" -> {
+                    // GTVL is on screen as the user asks: it comes back after.
+                    val relaunch = showing
+                    inBackground(result) {
+                        updater.install(arg!!, quiet = false, relaunch = relaunch)
+                        null
+                    }
+                }
+                "updateAtStandby" -> {
+                    standbyUpdate = arg
+                    result.success(null)
+                }
+                "allowUpdates" -> result.success(updater.allow())
                 else -> result.notImplemented()
             }
         }
         EventChannel(messenger, "gtvl/events").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
                 events = sink
-                ButtonService.onChange = { events?.success(mapOf("type" to "buttons")) }
+                ButtonService.onChange = buttonsChanged
+                UpdateReceiver.onStatus = updateStatus
                 launcherApps.registerCallback(appsCallback, mainThread)
                 connectivity.registerDefaultNetworkCallback(networkCallback, mainThread)
             }
 
-            override fun onCancel(arguments: Any?) {
-                launcherApps.unregisterCallback(appsCallback)
-                connectivity.unregisterNetworkCallback(networkCallback)
-                ButtonService.onChange = null
-                events = null
-            }
+            override fun onCancel(arguments: Any?) = stopEvents()
         })
+    }
+
+    private val buttonsChanged: () -> Unit = { events?.success(mapOf("type" to "buttons")) }
+    private val updateStatus: (Map<String, Any?>) -> Unit = { events?.success(it) }
+
+    /** Also when the activity goes, as Flutter then never cancels the events. */
+    private fun stopEvents() {
+        if (events == null) return
+        launcherApps.unregisterCallback(appsCallback)
+        connectivity.unregisterNetworkCallback(networkCallback)
+        if (ButtonService.onChange === buttonsChanged) ButtonService.onChange = null
+        if (UpdateReceiver.onStatus === updateStatus) UpdateReceiver.onStatus = null
+        events = null
+    }
+
+    /** GTVL is on screen; when it last stopped being. */
+    private var showing = false
+    private var hiddenAt = 0L
+
+    /**
+     * Something else was on screen at standby (an HDMI input, an app), so
+     * the Home some TVs send on waking (TCL's) must give it back to that.
+     */
+    private var giveBack = false
+    private val stopGivingBack = Runnable { keepGiveBack(false) }
+
+    /**
+     * Sets [giveBack]. A yes is kept beyond GTVL's process only by an update
+     * at standby, which ends it ([updateAtStandby]); the TV's Home on waking
+     * then starts GTVL afresh. Every no clears what was kept.
+     */
+    private fun keepGiveBack(value: Boolean) {
+        giveBack = value
+        if (!value) storeGiveBack(this, false)
+    }
+
+    /** A screensaver started over GTVL, which pauses it like another app would. */
+    private var underScreensaver = false
+
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_DREAMING_STARTED ->
+                    underScreensaver = showing || SystemClock.elapsedRealtime() - hiddenAt < 3000
+                // GTVL pauses as the screen goes off; paused long before, something else showed.
+                Intent.ACTION_SCREEN_OFF -> {
+                    keepGiveBack(!showing && !underScreensaver && SystemClock.elapsedRealtime() - hiddenAt > 3000)
+                    mainThread.removeCallbacks(stopGivingBack)
+                    standbyUpdate?.let(::updateAtStandby)
+                }
+                // That Home comes within moments of waking, if at all; a later one is the user's.
+                Intent.ACTION_SCREEN_ON -> mainThread.postDelayed(stopGivingBack, 5000)
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_DREAMING_STARTED)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(screen, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(screen, filter)
+        // Started afresh by the Home a TV sends on waking, GTVL's process
+        // having ended at standby (an update): give the screen back all the same.
+        if (intent.hasCategory(Intent.CATEGORY_HOME) && prefs.getBoolean(GIVE_BACK, false) &&
+            prefs.getInt(GIVE_BACK_BOOT, -1) == bootCount(this)
+        ) {
+            keepGiveBack(false)
+            if (openTvInput()) Log.i(TAG, "Woken to Home over another screen, started afresh: giving it back")
+        }
+    }
+
+    /** Installs the update at [path] as the TV goes to standby, keeping it awake till done. */
+    private fun updateAtStandby(path: String) {
+        standbyUpdate = null
+        // The update ends GTVL's process: the Home on waking finds this instead.
+        if (giveBack) storeGiveBack(this, true)
+        getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gtvl:update").acquire(2 * 60_000L)
+        Log.i(TAG, "Installing an update at standby")
+        worker.execute {
+            runCatching { updater.install(path, quiet = true, relaunch = false) }.onFailure { Log.w(TAG, "Update at standby failed", it) }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        showing = true
+        underScreensaver = false
+    }
+
+    override fun onPause() {
+        super.onPause()
+        showing = false
+        hiddenAt = SystemClock.elapsedRealtime()
     }
 
     /**
      * Home pressed while the launcher is already open: go back to the dock.
-     * A remapped button can also ask for settings or all apps ([OPEN]).
+     * The Home a TV sends on waking, over the input or app that was showing
+     * at standby, gives that back instead. A remapped button can also ask
+     * for settings or all apps ([OPEN]).
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.hasCategory(Intent.CATEGORY_HOME)) events?.success(mapOf("type" to "home"))
+        if (intent.hasCategory(Intent.CATEGORY_HOME)) {
+            if (giveBack) {
+                keepGiveBack(false)
+                Log.i(TAG, "Woken to Home over another screen: giving it back")
+                if (moveTaskToBack(true) || openTvInput()) return
+            }
+            events?.success(mapOf("type" to "home"))
+        }
         intent.getStringExtra(OPEN)?.let { events?.success(mapOf("type" to "open", "what" to it)) }
     }
 
+    /** The TV's own input screen, which opens on the input last used. */
+    private fun openTvInput(): Boolean {
+        val launch = Intent("com.android.tv.action.FORCE_LAUNCH_ON_BOOT")
+        val tv = packageManager.queryIntentActivities(launch, 0).firstOrNull()?.activityInfo ?: return false
+        return startNew(launch.setClassName(tv.packageName, tv.name))
+    }
+
     override fun onDestroy() {
+        unregisterReceiver(screen)
+        stopEvents()
+        deck.stop()
         worker.shutdown()
         super.onDestroy()
     }
@@ -141,6 +327,8 @@ class MainActivity : FlutterActivity() {
                     "label" to info.loadLabel(packageManager).toString(),
                     "tv" to tv,
                     "version" to updated(pkg),
+                    // Built into the TV: Android won't uninstall it.
+                    "system" to ((info.activityInfo.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0),
                 )
             }
         }
@@ -351,12 +539,29 @@ class MainActivity : FlutterActivity() {
         requestPermissions(arrayOf(permission), STORAGE_REQUEST)
     }
 
+    private var tvAnswer: MethodChannel.Result? = null
+
+    /** Answers true once GTVL may read TV listings, asking the user if needed. */
+    private fun allowTvListings(result: MethodChannel.Result) {
+        if (checkSelfPermission(TV_LISTINGS) == PackageManager.PERMISSION_GRANTED) return result.success(true)
+        tvAnswer?.success(false)
+        tvAnswer = result
+        requestPermissions(arrayOf(TV_LISTINGS), TV_REQUEST)
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != STORAGE_REQUEST) return
         val allowed = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        storageAnswer?.success(if (allowed) volumes() else null)
-        storageAnswer = null
+        when (requestCode) {
+            STORAGE_REQUEST -> {
+                storageAnswer?.success(if (allowed) volumes() else null)
+                storageAnswer = null
+            }
+            TV_REQUEST -> {
+                tvAnswer?.success(allowed)
+                tvAnswer = null
+            }
+        }
     }
 
     /** Mounted storage, the TV's own and any USB drives, as {path, name}. */
@@ -452,14 +657,15 @@ class MainActivity : FlutterActivity() {
 
     private val appsCallback = object : LauncherApps.Callback() {
         override fun onPackageAdded(pkg: String, user: UserHandle) = appsChanged()
-        override fun onPackageRemoved(pkg: String, user: UserHandle) = appsChanged()
+        override fun onPackageRemoved(pkg: String, user: UserHandle) = appsChanged(removed = pkg)
         override fun onPackageChanged(pkg: String, user: UserHandle) = appsChanged()
         override fun onPackagesAvailable(pkgs: Array<out String>, user: UserHandle, replacing: Boolean) = appsChanged()
         override fun onPackagesUnavailable(pkgs: Array<out String>, user: UserHandle, replacing: Boolean) = appsChanged()
     }
 
-    private fun appsChanged() {
-        events?.success(mapOf("type" to "apps"))
+    /** [removed]: an app uninstalled (not one being updated), which leaves the dock for good. */
+    private fun appsChanged(removed: String? = null) {
+        events?.success(mapOf("type" to "apps", "removed" to removed))
     }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -496,9 +702,24 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private const val TAG = "GTVL"
+
         /** An extra asking the launcher to open "settings" or "apps". */
         const val OPEN = "kanin.gtvl.OPEN"
         private const val STORAGE_REQUEST = 1
-        private const val STUBS = "com.google.android.tv.frameworkpackagestubs"
+        private const val TV_REQUEST = 2
+        /** Where TVs send the settings pages they lack: a stub that only says so. */
+        internal const val STUBS = "com.google.android.tv.frameworkpackagestubs"
+
+        // Kept in [Updater.prefs]: give the screen back on the next Home, as of which boot.
+        private const val GIVE_BACK = "giveBack"
+        private const val GIVE_BACK_BOOT = "giveBackBoot"
+
+        /** [giveBack] where a fresh process finds it, with the boot it holds for. */
+        private fun storeGiveBack(context: Context, value: Boolean) {
+            Updater.prefs(context).edit().putBoolean(GIVE_BACK, value).putInt(GIVE_BACK_BOOT, bootCount(context)).apply()
+        }
+
+        private fun bootCount(context: Context) = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, 0)
     }
 }

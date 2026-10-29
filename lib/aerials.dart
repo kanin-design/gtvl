@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 
 /// One video for the wallpaper player.
 class Scene {
-  const Scene(this.uri, this.caption, {this.kind = '', this.file = false, this.loop = false, this.hdr = false});
+  const Scene(this.uri, this.caption, {this.kind = '', this.file = false, this.loop = false});
 
   final String uri;
 
@@ -22,9 +22,6 @@ class Scene {
 
   /// Play this scene forever instead of moving on.
   final bool loop;
-
-  /// Dolby Vision, which shows only on the TV's own video surface.
-  final bool hdr;
 }
 
 /// Apple TV aerial films: a bundled list played in shuffled order, none
@@ -90,8 +87,11 @@ class Aerials {
     }
     final video = _bag.removeLast();
     final url = (video['url_$quality'] ?? video['url_1080p']) as String?;
-    return url == null ? null : Scene(url, _caption(video), kind: _kind(video), hdr: quality.endsWith('_hdr'));
+    return url == null ? null : Scene(url, _caption(video), kind: _kind(video));
   }
+
+  /// Whether [quality] plays as HDR on this TV.
+  bool showsHdr(String quality) => quality.endsWith('_hdr') && hdr.contains(quality);
 
   /// [quality], or its SDR twin when this TV can't show it.
   String _playable(String quality) =>
@@ -112,13 +112,7 @@ class Aerials {
       final meta = jsonDecode(_meta.readAsStringSync()) as Map<String, Object?>;
       final kind = meta['kind'] as String? ?? '';
       if (meta['quality'] != quality || off.contains(kind) || !_video.existsSync()) return null;
-      return Scene(
-        _video.path,
-        meta['caption'] as String? ?? '',
-        kind: kind,
-        file: true,
-        hdr: quality.endsWith('_hdr'),
-      );
+      return Scene(_video.path, meta['caption'] as String? ?? '', kind: kind, file: true);
     } on Object {
       return null; // nothing saved yet
     }

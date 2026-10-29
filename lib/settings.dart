@@ -10,8 +10,10 @@ import 'buttons.dart';
 import 'media.dart';
 import 'menu.dart' show showButtonsPrompt;
 import 'native.dart';
+import 'plex.dart';
 import 'services.dart';
 import 'ui.dart';
+import 'updates.dart';
 import 'wallpaper.dart';
 
 /// Opens the settings panel from the left.
@@ -23,6 +25,7 @@ Future<void> showSettings(BuildContext context) =>
 enum _Section {
   wallpaper('Wallpaper', Icons.wallpaper_outlined),
   dock('Dock', Icons.view_day_outlined),
+  shows('Shows', Icons.live_tv_outlined),
   topBar('Top bar', Icons.space_dashboard_outlined),
   apps('Apps', Icons.apps),
   buttons('Buttons', Icons.settings_remote_outlined),
@@ -42,7 +45,7 @@ const _qualities = [('1080p', '1080p'), ('1080p_hdr', '1080p HDR'), ('4k', '4K')
 const _speeds = [(0.5, 'Slow'), (0.75, 'Relaxed'), (1.0, 'Normal')];
 const _nextFilm = [(0, 'When it ends'), (2, 'Every 2 minutes'), (5, 'Every 5 minutes'), (10, 'Every 10 minutes')];
 const _dimming = [(0.0, 'None'), (0.1, 'Light'), (0.2, 'Medium'), (0.35, 'Strong')];
-const _sizes = [('small', 'Small'), ('medium', 'Medium'), ('large', 'Large')];
+const _sizes = [('xs', 'Extra small'), ('s', 'Small'), ('m', 'Medium'), ('l', 'Large'), ('xl', 'Extra large')];
 const _shapes = [('wide', 'Wide banners'), ('square', 'Rounded squares')];
 const _arrangements = [
   ('start', 'Left'),
@@ -66,6 +69,19 @@ const _lineWidths = [(0.0, 'None'), (1.0, 'Hairline'), (1.5, 'Thin'), (2.5, 'Bol
 const _lineBrightness = [(0.06, 'Faint'), (0.12, 'Soft'), (0.24, 'Bright'), (0.45, 'White')];
 const _sceneNames = {'space': 'Space', 'underwater': 'Underwater', 'cities': 'Cities', 'landscapes': 'Landscapes'};
 const _iconNames = {'settings': 'Settings', 'network': 'Network', 'vpn': 'VPN'};
+
+/// Moves between rows as [smoothTraversal] does; a row near the end of its
+/// level also brings the notes below it into view.
+final _rowTraversal = ReadingOrderTraversalPolicy(
+  requestFocusCallback: (node, {alignment, alignmentPolicy, curve, duration}) {
+    node.requestFocus();
+    if (node.context case final context?) reveal(context, endZone: _endZone);
+  },
+);
+
+/// How close to the end of a level a row brings the rest into view: more
+/// than a note or two, less than another row with its notes.
+const _endZone = 120.0;
 
 /// [text], cut to fit beside a row's label.
 String _short(String text) => text.length <= 16 ? text : '${text.substring(0, 15)}…';
@@ -93,8 +109,10 @@ class _Page {
   /// Called when the level closes, however it closes.
   final VoidCallback? onClose;
 
-  /// The row that opened the next level, highlighted while that level is open.
+  /// The row that opened the next level, highlighted while that level is
+  /// open, and which of the rows of that name it was.
   String? opened;
+  int openedNth = 0;
 }
 
 /// Tells rows whether they sit in a folded column, and which row there
@@ -132,6 +150,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   /// The open section; null while the full list shows.
   _Section? _section;
+
+  /// The section opened last, where the list opens next time, until GTVL restarts.
+  static _Section _last = _Section.wallpaper;
 
   /// Its levels, the deepest last.
   final _pages = <_Page>[];
@@ -199,6 +220,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       return;
     }
     _closeAll();
+    _last = section;
     setState(() {
       _section = section;
       _pages
@@ -217,15 +239,25 @@ class _SettingsPanelState extends State<SettingsPanel> {
     }
   }
 
-  /// Opens [page] beside the current level, which folds; [from] is the row
-  /// that opened it, when that isn't the focused one.
-  void _push(_Page page, {String? from}) {
-    final opener = from ?? _labelOf(FocusManager.instance.primaryFocus);
+  /// Opens [page] beside the current level, which folds, focusing its row
+  /// labelled [focus], else its first; [from] is the row that opened it,
+  /// when that isn't the focused one.
+  void _push(_Page page, {String? from, String? focus}) {
+    final focused = FocusManager.instance.primaryFocus;
+    final opener = from ?? _labelOf(focused);
+    // One button can be on two remotes: which of the rows so named.
+    final named = [
+      for (final node in _active.traversalDescendants)
+        if (_labelOf(node) == opener) node,
+    ];
+    final nth = from == null && focused != null ? named.indexOf(focused) : -1;
     setState(() {
-      _pages.last.opened = opener;
+      _pages.last
+        ..opened = opener
+        ..openedNth = nth < 0 ? 0 : nth;
       _pages.add(page);
     });
-    _focusRow();
+    _focusRow(focus);
   }
 
   void _back() {
@@ -236,7 +268,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       setState(_pages.removeLast);
       closing.onClose?.call();
       // Back on the row that opened the level just closed.
-      _focusRow(_pages.last.opened);
+      _focusRow(_pages.last.opened, _pages.last.openedNth);
     } else if (_section != null) {
       final section = _section!;
       _closeAll();
@@ -248,19 +280,24 @@ class _SettingsPanelState extends State<SettingsPanel> {
     }
   }
 
-  /// Once the deepest level is built, focuses its row labelled [label], or
-  /// else its first row; with no rows, the level itself, so Left still works.
-  void _focusRow([String? label]) => WidgetsBinding.instance.addPostFrameCallback((_) {
+  /// Once the deepest level is built, focuses its row labelled [label] (the
+  /// [nth] of that name), or else its first row, scrolled into view; with no
+  /// rows, the level itself, so Left still works. Never while a menu is open
+  /// over settings.
+  void _focusRow([String? label, int nth = 0]) => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!mounted || !(ModalRoute.isCurrentOf(context) ?? true)) return;
     final rows = _active.traversalDescendants;
-    final match = label == null ? null : rows.where((node) => _labelOf(node) == label).firstOrNull;
-    (match ?? rows.firstOrNull ?? _active).requestFocus();
+    final named = label == null ? const <FocusNode>[] : rows.where((node) => _labelOf(node) == label);
+    final node = named.elementAtOrNull(nth) ?? named.firstOrNull ?? rows.firstOrNull ?? _active;
+    node.requestFocus();
+    if (node != _active && node.context != null) reveal(node.context!, endZone: _endZone);
   });
 
   /// The label of the row [node] belongs to.
   static String? _labelOf(FocusNode? node) => node?.context?.findAncestorWidgetOfExactType<_Row>()?.label;
 
-  /// A level of [options] with a check on the current one. Choosing applies
-  /// at once and stays, so the change shows behind the panel.
+  /// A level of [options] with a check on the current one, which it opens on.
+  /// Choosing applies at once and stays, so the change shows behind the panel.
   void _choose<T>(
     String title,
     List<(T, String)> options,
@@ -287,13 +324,16 @@ class _SettingsPanelState extends State<SettingsPanel> {
         if (note != null) _Note(note),
       ];
     }),
+    focus: _label(options, current()),
   );
 
   KeyEventResult _onRailKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.arrowRight) return KeyEventResult.ignored;
     if (_section == null) {
-      // Right on the top level: back to the home screen.
-      Navigator.of(context).pop();
+      // Right on the full list opens the section in focus, as OK does; not
+      // Android settings, as Right shouldn't leave GTVL.
+      final section = _Section.values.where((section) => _sectionNodes[section]!.hasPrimaryFocus).firstOrNull;
+      if (section != null && section.hasPage) _openSection(section);
     } else {
       final last = _active.focusedChild;
       if (last != null) {
@@ -309,8 +349,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.arrowLeft || _moving != null) {
       return KeyEventResult.ignored;
     }
-    // Among previews, Left first moves to the one beside.
-    if (FocusManager.instance.primaryFocus?.focusInDirection(TraversalDirection.left) ?? false) {
+    // Among previews, Left first moves to the one beside. (A level with no
+    // rows has the level itself focused, which Flutter would just focus again.)
+    final focused = FocusManager.instance.primaryFocus;
+    if (focused != _active && (focused?.focusInDirection(TraversalDirection.left) ?? false)) {
       return KeyEventResult.handled;
     }
     if (_pages.length > 1) {
@@ -348,7 +390,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
             sigma: 40,
             border: const Border(right: BorderSide(color: Look.hairline)),
             child: ListenableBuilder(
-              listenable: Listenable.merge([s.config, s.apps, s.status]),
+              listenable: Listenable.merge([s.config, s.apps, s.status, s.plex, s.appRows, s.updates]),
               builder: (context, _) => Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -411,7 +453,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
             width: collapsed ? 50 : listWidth - 16,
             collapsed: collapsed,
             selected: _section == section,
-            autofocus: section == _Section.wallpaper,
+            // An update waits in About.
+            badge: section == _Section.about && s.updates.waiting,
+            autofocus: section == _last,
             onPressed: () => _openSection(section),
             // In the rail, moving between icons switches the page beside it.
             onFocused: () {
@@ -427,8 +471,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
   /// focusable; the deepest one slides in a little from the right.
   Widget _column(_Page page, {required bool folded}) {
     final list = FocusTraversalGroup(
-      policy: smoothTraversal,
-      child: ListView(padding: const EdgeInsets.fromLTRB(10, 2, 10, 28), children: page.rows()),
+      policy: _rowTraversal,
+      // Keyed by level, so a level shown again comes back scrolled where it was.
+      child: ListView(
+        key: PageStorageKey<_Page>(page),
+        padding: const EdgeInsets.fromLTRB(10, 2, 10, 28),
+        children: page.rows(),
+      ),
     );
     return _Column(
       folded: folded,
@@ -452,6 +501,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   List<Widget> _rowsFor(_Section section) => switch (section) {
     _Section.wallpaper => _wallpaperRows(),
     _Section.dock => _dockRows(),
+    _Section.shows => _showRows(),
     _Section.topBar => _topBarRows(),
     _Section.apps => _appRows(),
     _Section.buttons => _buttonRows(),
@@ -459,7 +509,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _Section.android => const [],
   };
 
-  /// Choosing a kind shows it and opens its own settings beside it.
+  /// OK on a kind shows it and opens its own settings beside it; Right only
+  /// opens them, to look without changing the wallpaper.
   List<Widget> _wallpaperRows() {
     final c = s.config;
     return [
@@ -469,6 +520,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
         checked: c.wallpaper == 'aerials',
         chevron: true,
         onPressed: () => _show('aerials', _Page('Apple aerials', _aerialRows)),
+        onRight: () => _push(_Page('Apple aerials', _aerialRows)),
       ),
       _galleryRow(MediaKind.videos),
       _galleryRow(MediaKind.pictures),
@@ -477,6 +529,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
         checked: c.wallpaper == 'gradient',
         chevron: true,
         onPressed: () => _show('gradient', _Page('Gradient', _gradientRows)),
+        onRight: () => _push(_Page('Gradient', _gradientRows)),
       ),
       const _Header('Look'),
       _Row(
@@ -488,31 +541,66 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
-  /// Shows [kind] of wallpaper and opens its settings beside the list.
-  void _show(String kind, _Page page) {
+  /// Shows [kind] of wallpaper.
+  void _use(String kind) {
     final c = s.config;
     c.wallpaper = kind;
     if (kind != 'aerials') s.caption.value = null;
     c.changed();
+  }
+
+  /// Shows [kind] of wallpaper and opens its settings beside the list.
+  void _show(String kind, _Page page) {
+    _use(kind);
     _push(page);
   }
 
+  /// Atop a kind's settings, opened with Right while another kind shows: a
+  /// way to show this one.
+  List<Widget> _useRow(String kind) => [
+    if (s.config.wallpaper != kind)
+      _Row(
+        'Use as wallpaper',
+        note: 'Showing ${_kindNames[s.config.wallpaper] ?? 'another kind'} now',
+        onPressed: () {
+          _use(kind);
+          _focusRow();
+        },
+      ),
+  ];
+
+  static const _kindNames = {
+    'aerials': 'Apple aerials',
+    'video': 'videos',
+    'image': 'pictures',
+    'gradient': 'a gradient',
+  };
+
   /// Videos or pictures: a gallery to pick from. With some picked already,
-  /// they show at once.
-  Widget _galleryRow(MediaKind kind) => _Row(
-    kind.label,
-    checked: s.config.wallpaper == kind.wallpaper,
-    chevron: true,
-    onPressed: () {
+  /// OK shows them at once; Right only opens the gallery.
+  Widget _galleryRow(MediaKind kind) {
+    void open({required bool show}) {
       _findOnline(kind);
       _fromStorage[kind] = [
         for (final path in _chosen(kind))
           if (!_isDownload(path)) path,
       ];
       final page = _Page(kind.label, () => _galleryRows(kind), wide: true);
-      _chosen(kind).isEmpty ? _push(page) : _show(kind.wallpaper, page);
-    },
-  );
+      if (show && _chosen(kind).isNotEmpty) {
+        _show(kind.wallpaper, page);
+      } else {
+        _push(page);
+      }
+    }
+
+    return _Row(
+      kind.label,
+      checked: s.config.wallpaper == kind.wallpaper,
+      chevron: true,
+      onPressed: () => open(show: true),
+      onRight: () => open(show: false),
+    );
+  }
 
   /// What [kind] shows when it is the wallpaper.
   List<String> _chosen(MediaKind kind) => kind == MediaKind.pictures ? s.config.pictures : s.config.videos;
@@ -540,6 +628,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     final several = chosen.length > 1 || chosen.any((path) => !kind.matches(path));
     final shuffle = videos ? c.videoShuffle : c.pictureShuffle;
     return [
+      if (chosen.isNotEmpty) ..._useRow(kind.wallpaper),
       _Row('Browse storage', chevron: true, onPressed: () => _openStorage(kind)),
       if (_denied.contains(kind))
         _Note(
@@ -549,6 +638,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
         _Row(
           'Loop each video',
           value: _label(_videoLoops, c.videoLoopMinutes),
+          note: several ? null : 'One video loops on its own',
           chevron: true,
           enabled: several,
           onPressed: () => _choose(
@@ -563,12 +653,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
         _Row(
           'Change every',
           value: _label(_pictureEvery, c.pictureMinutes),
+          note: several ? null : 'Needs two or more pictures',
           chevron: true,
           enabled: several,
           onPressed: () => _choose('Change every', _pictureEvery, () => c.pictureMinutes, (v) => c.pictureMinutes = v),
         ),
       _Row(
         'Shuffle',
+        note: several ? null : 'Needs two or more ${kind.label.toLowerCase()}',
         toggle: shuffle,
         enabled: several,
         onPressed: () {
@@ -826,6 +918,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     final c = s.config;
     final scenesOn = Aerials.kinds.where((kind) => !c.aerialsOff.contains(kind)).length;
     return [
+      ..._useRow('aerials'),
       _Row(
         'Quality',
         value: _label(_qualities, c.aerialQuality),
@@ -861,7 +954,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       ),
       _Row(
         'Instant start',
-        note: 'Keeps one film on the TV, 250 MB',
+        note: 'Keeps one film on the TV, 250 MB',
         toggle: c.aerialCache,
         onPressed: () {
           c.aerialCache = !c.aerialCache;
@@ -889,6 +982,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
+  /// Choosing a gradient shows it, also when the page was only looked at.
   List<Widget> _gradientRows() {
     final c = s.config;
     return [
@@ -899,7 +993,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
           checked: c.gradient == i,
           onPressed: () {
             c.gradient = i;
-            c.changed();
+            _use('gradient');
           },
         ),
     ];
@@ -926,9 +1020,144 @@ class _SettingsPanelState extends State<SettingsPanel> {
         chevron: true,
         onPressed: () => _choose('Arrange', _arrangements, () => c.dockAlign, (v) => c.dockAlign = v),
       ),
+      _Slider(
+        'Spacing',
+        value: c.dockSpacing,
+        min: 0.25,
+        max: 3,
+        onChanged: (v) {
+          c.dockSpacing = v;
+          c.changed();
+        },
+      ),
+      // Past about 220%, a square tile is a circle already.
+      _Slider(
+        'Corners',
+        value: c.tileCorners,
+        min: 0,
+        max: 2.2,
+        onChanged: (v) {
+          c.tileCorners = v;
+          c.changed();
+        },
+      ),
+      _Slider(
+        'Height',
+        value: c.dockRoom,
+        min: 0.4,
+        max: 2.5,
+        onChanged: (v) {
+          c.dockRoom = v;
+          c.changed();
+        },
+      ),
+      _Row(
+        'App names',
+        note: 'Under the app in focus',
+        toggle: c.dockNames,
+        onPressed: () {
+          c.dockNames = !c.dockNames;
+          c.changed();
+        },
+      ),
       _Row('Glass', chevron: true, onPressed: () => _push(_Page('Glass', _glassRows))),
-      const _Note('Size and shape apply to every app, in the dock and below it.'),
+      const _Note('Size, shape, spacing and corners apply to every app, in the dock and below it.'),
     ];
+  }
+
+  /// Rows of things to watch between the dock and all apps: from Plex, and
+  /// what other apps share once GTVL may read TV listings.
+  List<Widget> _showRows() {
+    final c = s.config;
+    final plex = s.plex;
+    final apps = s.appRows;
+    void flip(String id) {
+      if (!c.showsOff.remove(id)) c.showsOff.add(id);
+      c.changed();
+    }
+
+    return [
+      const _Header('Plex'),
+      _Row(
+        plex.signedIn ? 'Account' : 'Sign in',
+        value: plex.signedIn ? plex.user : null,
+        chevron: true,
+        onPressed: plex.signedIn ? () => _push(_Page('Plex account', _plexAccountRows)) : _plexSignIn,
+      ),
+      for (final (id, label) in Plex.rowNames)
+        _Row(label, toggle: !c.showsOff.contains(id), enabled: plex.signedIn, onPressed: () => flip(id)),
+      _Note(
+        plex.signedIn
+            ? 'The rows show below the dock, above all apps. OK opens a film or episode in Plex.'
+            : 'Sign in to see what you are watching, and what is new, on your Plex servers.',
+      ),
+      const _Header('Other apps'),
+      if (!apps.allowed) ...[
+        _Row('Allow TV listings', chevron: true, onPressed: apps.allow),
+        const _Note(
+          'Shows what you are watching in HBO Max, Netflix and other apps, and the channels they share. '
+          'Android asks once.',
+        ),
+      ] else if (apps.watching.isEmpty && apps.channels.isEmpty)
+        const _Note('No app shares a row right now. Watch something in an app, and it shows here.')
+      else
+        for (final row in [...apps.watching, ...apps.channels])
+          _Row(
+            row.source,
+            key: ValueKey(row.id),
+            note: row.title == row.source ? 'Channel' : row.title,
+            toggle: !c.showsOff.contains(row.id),
+            onPressed: () => flip(row.id),
+          ),
+    ];
+  }
+
+  List<Widget> _plexAccountRows() => [
+    _Row('Signed in as', value: s.plex.user ?? 'Plex'),
+    _Row(
+      'Sign out',
+      onPressed: () {
+        s.plex.signOut();
+        _back();
+      },
+    ),
+  ];
+
+  /// Shows a code to enter at plex.tv/link, and goes back once Plex has it.
+  void _plexSignIn() {
+    String? code;
+    var failed = false;
+    final page = _Page(
+      'Sign in to Plex',
+      () => [
+        if (failed)
+          const _Note("Plex didn't get the code in time. Go back and try again.")
+        else if (code == null)
+          const _Note('Asking Plex for a code…')
+        else ...[
+          const _Note('On your phone or computer, go to plex.tv/link and enter this code:'),
+          _Code(code!),
+          const _Note('This page closes by itself once you are signed in; leaving it first is fine too.'),
+        ],
+      ],
+    );
+    _push(page);
+    s.plex.startSignIn().then(
+      (given) async {
+        if (!mounted || _pages.lastOrNull != page) return;
+        setState(() => code = given);
+        final done = await s.plex.signIn;
+        if (!mounted || _pages.lastOrNull != page) return;
+        if (done) {
+          _back();
+        } else {
+          setState(() => failed = true);
+        }
+      },
+      onError: (Object _) {
+        if (mounted) setState(() => failed = true);
+      },
+    );
   }
 
   List<Widget> _glassRows() {
@@ -999,8 +1228,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
         },
       ),
       _Row(
-        'Wallpaper location',
-        note: 'Under the clock',
+        'Aerial location',
+        note: 'Where the aerial was filmed, under the clock',
         toggle: c.showCaption,
         onPressed: () {
           c.showCaption = !c.showCaption;
@@ -1032,6 +1261,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   /// Up and Down move the icon; OK or Back puts it down.
   KeyEventResult _onMoveKey(String id, KeyEvent event) {
+    // Back, down and up alike, goes on to PopScope, whose _back puts it down
+    // and closes nothing more.
+    if (event.logicalKey == LogicalKeyboardKey.goBack) return KeyEventResult.ignored;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.handled;
     final order = s.config.topIcons;
     final i = order.indexOf(id);
@@ -1061,7 +1293,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
     final hidden = s.apps.hidden;
     return [
       const _Header('Hidden apps'),
-      if (hidden.isEmpty) const _Note('None. Hold OK on an app and choose Hide.'),
+      // Greyed, but focusable: Right from the rail lands somewhere you can see.
+      if (hidden.isEmpty) const _Row('No hidden apps', note: 'Hold OK on an app and choose Hide', enabled: false),
       for (final app in hidden)
         _Row(
           app.label,
@@ -1082,7 +1315,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
     final state = await Native.buttons(knownButtons.keys.toList());
     if (!mounted) return;
     setState(() => _buttons = state);
-    if (prompt && !state.on) showButtonsPrompt(context);
+    if (prompt && !state.on) await showButtonsPrompt(context);
+    // The rows came after the level opened: focus the first now.
+    if (mounted && FocusManager.instance.primaryFocus == _active) _focusRow();
   }
 
   /// [action], or while the button service is off, asking to turn it on.
@@ -1109,12 +1344,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
         chevron: true,
         onPressed: state.on ? Native.buttonSettings : () => showButtonsPrompt(context),
       ),
+      // First: the quickest way to any button, the ones no remote lists too.
+      _Row('Find a button', chevron: true, onPressed: _whenOn(_findButton)),
       for (final MapEntry(key: id, value: (name, keys)) in remotes.entries) ...[
         _Header(name),
         for (final key in inButtonOrder(keys)) _buttonRow(id, name, key),
       ],
       if (remotes.isEmpty) const _Note('No remote lists its buttons. Find a button by pressing it.'),
-      _Row('Find a button', chevron: true, onPressed: _whenOn(_findButton)),
       const _Note('OK, the arrows and Power always do what they do.'),
     ];
   }
@@ -1277,12 +1513,45 @@ class _SettingsPanelState extends State<SettingsPanel> {
     });
   }
 
-  List<Widget> _aboutRows() => const [
-    _Row('Version', value: '0.2.1 alpha'),
-    _Note('GTVL: a clean, light home screen for Android TV.'),
-    _Note('Aerial films by Apple. The list of films comes from the Overflight project (Apache-2.0).'),
-    _Note('Text set in Inter, under the SIL Open Font License.'),
-  ];
+  /// The version, its updates from GitHub, and credits.
+  List<Widget> _aboutRows() {
+    final updates = s.updates;
+    final release = updates.release;
+    final ready = updates.state == UpdateState.ready && release != null;
+    return [
+      _Row('Version', value: updates.version),
+      const _Header('Updates'),
+      _Row(
+        ready ? 'Install version ${release.version}' : 'Check for updates',
+        value: switch (updates.state) {
+          UpdateState.checking => 'Checking…',
+          UpdateState.latest => 'Up to date',
+          UpdateState.downloading => 'Downloading ${(updates.progress * 100).floor()}%',
+          UpdateState.installing => 'Installing…',
+          _ => null,
+        },
+        enabled: !updates.busy,
+        onPressed: ready ? updates.install : updates.check,
+      ),
+      // From Android 12, GTVL updates itself without that leave.
+      if (ready && !updates.allowed && !updates.quiet)
+        const _Note('The first time, Android asks you to let GTVL install apps. Turn it on, come back, and install.'),
+      if (updates.state == UpdateState.failed) _Note(updates.problem ?? 'Something went wrong.'),
+      if (release?.notes case final notes? when updates.state != UpdateState.failed) _Note(notes),
+      _Row(
+        'Automatic updates',
+        note: updates.quiet
+            ? 'Checks every few hours, and installs while the TV is in standby'
+            : 'Checks every few hours, and gets them ready to install here',
+        toggle: s.config.autoUpdate,
+        onPressed: () => updates.setAuto(!s.config.autoUpdate),
+      ),
+      const _Header('Credits'),
+      const _Note('GTVL: a clean, light home screen for Android TV.'),
+      const _Note('Aerial films by Apple. The list of films comes from the Overflight project (Apache-2.0).'),
+      const _Note('Text set in Inter, under the SIL Open Font License.'),
+    ];
+  }
 }
 
 /// Where you are: each level's title, joined by ».
@@ -1336,6 +1605,7 @@ class _SectionItem extends StatelessWidget {
     required this.width,
     required this.collapsed,
     required this.selected,
+    required this.badge,
     required this.autofocus,
     required this.onPressed,
     required this.onFocused,
@@ -1346,6 +1616,9 @@ class _SectionItem extends StatelessWidget {
   final double width;
   final bool collapsed;
   final bool selected;
+
+  /// A dot on the icon: something waits in the section.
+  final bool badge;
   final bool autofocus;
   final VoidCallback onPressed;
   final VoidCallback onFocused;
@@ -1386,7 +1659,14 @@ class _SectionItem extends StatelessWidget {
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(color: const Color(0x14FFFFFF), borderRadius: BorderRadius.circular(8)),
-                  child: Icon(section.icon, size: 17, color: focused || selected ? Look.white : _soft),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    clipBehavior: Clip.none,
+                    children: [
+                      Icon(section.icon, size: 17, color: focused || selected ? Look.white : _soft),
+                      if (badge) const Positioned(right: -2, top: -2, child: Badge()),
+                    ],
+                  ),
                 ),
                 const SizedBox(width: 14),
                 AnimatedOpacity(
@@ -1416,6 +1696,7 @@ class _Row extends StatelessWidget {
     this.toggle,
     this.checked = false,
     this.chevron = false,
+    this.onRight,
     this.active = false,
     this.enabled = true,
     this.onPressed,
@@ -1432,6 +1713,10 @@ class _Row extends StatelessWidget {
 
   /// Opens a deeper level; Right does too.
   final bool chevron;
+
+  /// What Right does on a chevron row instead of OK's action: opens the
+  /// level without choosing what the row stands for.
+  final VoidCallback? onRight;
   final bool active;
 
   /// False greys the row out: it can still be focused, to read why, but does nothing.
@@ -1451,7 +1736,7 @@ class _Row extends StatelessWidget {
         final custom = onKey?.call(event) ?? KeyEventResult.ignored;
         if (custom != KeyEventResult.ignored) return custom;
         if (enabled && chevron && event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowRight) {
-          onPressed?.call();
+          (onRight ?? onPressed)?.call();
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
@@ -1722,3 +2007,145 @@ Widget _fadeIn(BuildContext context, Widget child, int? frame, bool wasSynchrono
 
 /// Nothing, where an image could not load.
 Widget _blank(BuildContext context, Object error, StackTrace? stackTrace) => const SizedBox.shrink();
+
+/// A sign-in code, large enough to read across the room. Hidden in folded
+/// columns.
+class _Code extends StatelessWidget {
+  const _Code(this.code);
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) => (_Column.of(context)?.folded ?? false)
+      ? const SizedBox.shrink()
+      : Padding(
+          padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
+          child: Text(code, style: Look.title.copyWith(fontSize: 44, letterSpacing: 10)),
+        );
+}
+
+/// A setting that slides: Left and Right change it a step at a time, and
+/// held they keep going; the dock behind shows each step at once. It reads
+/// as a share of the usual value (1, today's look), which a tick marks.
+/// Left adjusts here, so Back is the way out.
+class _Slider extends StatelessWidget {
+  const _Slider(this.label, {required this.value, required this.min, required this.max, required this.onChanged});
+
+  final String label;
+  final double value, min, max;
+  final ValueChanged<double> onChanged;
+
+  static const _step = 0.05;
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = '${(value * 100).round()}%';
+    if (_Column.of(context)?.folded ?? false) return _Row(label, value: percent);
+    return Pressable(
+      onKey: (event) {
+        if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+        final direction = switch (event.logicalKey) {
+          LogicalKeyboardKey.arrowLeft => -1,
+          LogicalKeyboardKey.arrowRight => 1,
+          _ => 0,
+        };
+        if (direction == 0) return KeyEventResult.ignored;
+        final next = ((value + direction * _step) / _step).round() * _step;
+        onChanged(double.parse(next.clamp(min, max).toStringAsFixed(2)));
+        return KeyEventResult.handled;
+      },
+      builder: (context, focused) => AnimatedScale(
+        scale: focused ? 1.02 : 1,
+        duration: Look.fast,
+        curve: Look.ease,
+        child: AnimatedContainer(
+          duration: Look.fast,
+          curve: Look.ease,
+          margin: const EdgeInsets.symmetric(vertical: 1),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+          decoration: BoxDecoration(
+            color: focused ? _focusFill : const Color(0x00FFFFFF),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: Look.body.copyWith(color: focused ? Look.white : const Color(0xE6FFFFFF)),
+                    ),
+                  ),
+                  // Arrows either side of the value while focused: Left and Right change it.
+                  // Their room is kept, so nothing moves as they come and go.
+                  AnimatedOpacity(
+                    opacity: focused ? 1 : 0,
+                    duration: Look.fast,
+                    child: const Icon(Icons.chevron_left_rounded, size: 18, color: _soft),
+                  ),
+                  Text(percent, style: Look.value.copyWith(color: focused ? Look.white : _soft)),
+                  AnimatedOpacity(
+                    opacity: focused ? 1 : 0,
+                    duration: Look.fast,
+                    child: const Icon(Icons.chevron_right_rounded, size: 18, color: _soft),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              _Track(at: (value - min) / (max - min), usual: (1 - min) / (max - min), focused: focused),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A slider's line: filled up to [at] (0 to 1), a knob there while focused,
+/// and a tick at the usual value.
+class _Track extends StatelessWidget {
+  const _Track({required this.at, required this.usual, required this.focused});
+
+  final double at, usual;
+  final bool focused;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 12,
+    child: LayoutBuilder(
+      builder: (context, box) {
+        final width = box.maxWidth;
+        return Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.centerLeft,
+          children: [
+            Container(
+              height: 3,
+              decoration: BoxDecoration(color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(2)),
+            ),
+            Container(
+              width: width * at.clamp(0.0, 1.0),
+              height: 3,
+              decoration: BoxDecoration(color: focused ? Look.white : _soft, borderRadius: BorderRadius.circular(2)),
+            ),
+            Positioned(
+              left: width * usual - 1,
+              child: Container(width: 2, height: 10, color: _quiet),
+            ),
+            if (focused)
+              Positioned(
+                left: width * at.clamp(0.0, 1.0) - 6,
+                child: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: const BoxDecoration(color: Look.white, shape: BoxShape.circle),
+                ),
+              ),
+          ],
+        );
+      },
+    ),
+  );
+}

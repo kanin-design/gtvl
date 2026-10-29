@@ -38,8 +38,8 @@ class ButtonService : AccessibilityService() {
     /** The remapped button down now, or waiting to see if a second press follows. */
     private var press: Press? = null
 
-    /** A button caught while finding one: its release is kept too. */
-    private var swallow = KeyEvent.KEYCODE_UNKNOWN
+    /** A button caught while finding one, by [keyName]: its release is kept too. */
+    private var swallow: String? = null
 
     private var finding: ((Map<String, String>?) -> Unit)? = null
     private val giveUp = Runnable { reply(null) }
@@ -69,13 +69,13 @@ class ButtonService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.isPrintingKey || event.keyCode in untouchable) return false
-        if (event.keyCode == swallow) {
-            if (event.action == KeyEvent.ACTION_UP) swallow = KeyEvent.KEYCODE_UNKNOWN
+        val key = keyName(event)
+        if (key == swallow) {
+            if (event.action == KeyEvent.ACTION_UP) swallow = null
             return true
         }
         val device = event.device ?: return false
         val remote = remoteId(device)
-        val key = keyName(event)
         val down = event.action == KeyEvent.ACTION_DOWN
         if (down && event.repeatCount == 0) Log.d(TAG, "$key on $remote")
         if (finding != null && down) {
@@ -84,7 +84,7 @@ class ButtonService : AccessibilityService() {
                 reply(null)
                 return false
             }
-            swallow = event.keyCode
+            swallow = key
             reply(mapOf("remote" to remote, "name" to device.name, "key" to key))
             return true
         }
@@ -104,11 +104,19 @@ class ButtonService : AccessibilityService() {
                 current.done = true
                 run(remap["double"], current)
             } else {
+                press?.let { held ->
+                    // Another remapped button while that one is still down: it was a press.
+                    main.removeCallbacks(held.hold)
+                    if (!held.done) run(held.slot("press"), held)
+                }
                 press = Press(remote, key, event.keyCode, event.deviceId).also {
                     if (remap["hold"] != null) main.postDelayed(it.hold, holdTime)
                 }
             }
-        } else if (current != null) {
+        } else if (current == null) {
+            // Its press went on to the app (or was settled already): so does its release.
+            return false
+        } else {
             main.removeCallbacks(current.hold)
             when {
                 current.done -> press = null

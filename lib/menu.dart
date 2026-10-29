@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/widgets.dart';
 
@@ -25,7 +26,7 @@ class MenuItem {
 /// A centred frosted-glass menu: a header, groups of rows split by a
 /// full-width hairline (rows within a group by an inset one), and an
 /// optional centred action at the bottom.
-class GlassMenu extends StatelessWidget {
+class GlassMenu extends StatefulWidget {
   const GlassMenu({super.key, required this.title, this.subtitle, this.leading, required this.groups, this.footer});
 
   final String title;
@@ -35,13 +36,42 @@ class GlassMenu extends StatelessWidget {
   final MenuItem? footer;
 
   @override
+  State<GlassMenu> createState() => _GlassMenuState();
+}
+
+class _GlassMenuState extends State<GlassMenu> {
+  /// The row in focus, by its place among all rows. The inset lines beside
+  /// it hide, so its fill meets the rows above and below in a straight edge.
+  final _focused = ValueNotifier<int?>(null);
+
+  @override
+  void dispose() {
+    _focused.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final rows = <Widget>[];
-    for (final group in groups) {
+    var index = 0;
+    for (final group in widget.groups) {
       if (rows.isNotEmpty) rows.add(const Hairline());
-      for (var i = 0; i < group.length; i++) {
-        if (i > 0) rows.add(const Hairline(indent: 46));
-        rows.add(_MenuRow(group[i], autofocus: rows.isEmpty));
+      for (var i = 0; i < group.length; i++, index++) {
+        final row = index;
+        if (i > 0) rows.add(_Divider(_focused, below: row));
+        rows.add(
+          _MenuRow(
+            group[i],
+            autofocus: rows.isEmpty,
+            onFocusChange: (focused) {
+              if (focused) {
+                _focused.value = row;
+              } else if (_focused.value == row) {
+                _focused.value = null;
+              }
+            },
+          ),
+        );
       }
     }
     return Center(
@@ -60,13 +90,14 @@ class GlassMenu extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
                 child: Column(
                   children: [
-                    if (leading != null) ...[leading!, const SizedBox(height: 8)],
+                    if (widget.leading case final leading?) ...[leading, const SizedBox(height: 8)],
                     Text(
-                      title,
+                      widget.title,
                       textAlign: TextAlign.center,
                       style: Look.body.copyWith(fontWeight: FontWeight.w600),
                     ),
-                    if (subtitle != null) Text(subtitle!, textAlign: TextAlign.center, style: Look.small),
+                    if (widget.subtitle case final subtitle?)
+                      Text(subtitle, textAlign: TextAlign.center, style: Look.small),
                   ],
                 ),
               ),
@@ -79,7 +110,7 @@ class GlassMenu extends StatelessWidget {
                   ),
                 ),
               ),
-              if (footer != null) ...[const Hairline(), _MenuRow(footer!, centered: true)],
+              if (widget.footer case final footer?) ...[const Hairline(), _MenuRow(footer, centered: true)],
             ],
           ),
         ),
@@ -88,17 +119,36 @@ class GlassMenu extends StatelessWidget {
   }
 }
 
+/// The inset line between two rows of a group, hidden while either has focus.
+class _Divider extends StatelessWidget {
+  const _Divider(this.focused, {required this.below});
+
+  final ValueListenable<int?> focused;
+
+  /// The row under the line; the one above it is the row before.
+  final int below;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: focused,
+    builder: (context, row, line) => Opacity(opacity: row == below || row == below - 1 ? 0 : 1, child: line),
+    child: const Hairline(indent: 46),
+  );
+}
+
 class _MenuRow extends StatelessWidget {
-  const _MenuRow(this.item, {this.autofocus = false, this.centered = false});
+  const _MenuRow(this.item, {this.autofocus = false, this.centered = false, this.onFocusChange});
 
   final MenuItem item;
   final bool autofocus;
   final bool centered;
+  final ValueChanged<bool>? onFocusChange;
 
   @override
   Widget build(BuildContext context) => Pressable(
     autofocus: autofocus,
     onPressed: item.onPressed,
+    onFocusChange: onFocusChange,
     builder: (context, focused) {
       final color = (item.destructive ? Look.danger : Look.white).withValues(alpha: focused ? 1 : 0.88);
       final text = Text(item.label, style: Look.body.copyWith(color: color));
@@ -185,7 +235,10 @@ Future<void> showAppMenu(BuildContext context, AppInfo app, {VoidCallback? onMov
           ],
           [MenuItem('App info', () => then(() => Native.appInfo(app.package)), icon: Icons.info_outline)],
         ],
-        footer: MenuItem('Uninstall', () => then(() => Native.uninstall(app.package)), destructive: true),
+        // Android won't uninstall an app built into the TV.
+        footer: app.system
+            ? null
+            : MenuItem('Uninstall', () => then(() => Native.uninstall(app.package)), destructive: true),
       );
     }),
   );
