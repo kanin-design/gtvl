@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="buttons_label">GTVL buttons</string>
+    <string name="buttons_description">Lets GTVL change what your remote\'s buttons do when pressed, held or pressed twice. GTVL acts only on the buttons you change, never reads the screen, and ignores typed letters and numbers.</string>
+    <!-- Where the switch is, shown over Android settings: on Android TV 11 and older, and on Google TV. -->
+    <string name="buttons_path">Device Preferences › Accessibility › Services › GTVL buttons</string>
+    <string name="buttons_path_system">System › Accessibility › GTVL buttons</string>
+</resources>

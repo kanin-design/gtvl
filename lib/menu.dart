@@ -123,6 +123,33 @@ class _MenuRow extends StatelessWidget {
   );
 }
 
+/// Asks the user to turn on GTVL buttons, which only Android's own settings
+/// can do. TVs rarely open straight to its switch, so it says where that is.
+Future<void> showButtonsPrompt(BuildContext context) {
+  final navigator = Navigator.of(context);
+  return navigator.push(
+    overlayRoute(
+      (context) => GlassMenu(
+        leading: const Icon(Icons.settings_remote_outlined, size: 30, color: Look.white),
+        title: 'Turn on button remapping',
+        subtitle:
+            'In Android settings, go to Device Preferences › Accessibility › Services › GTVL buttons, '
+            'and turn it on. On Google TV, Accessibility is under System. Android warns that it could see '
+            'what you type: GTVL only acts on the buttons you change, and never reads the screen.',
+        groups: [
+          [
+            MenuItem('Open Android settings', () {
+              navigator.pop();
+              Native.buttonSettings();
+            }, icon: Icons.open_in_new),
+          ],
+        ],
+        footer: MenuItem('Not now', navigator.pop),
+      ),
+    ),
+  );
+}
+
 /// The menu shown when OK is held on an app. [onMove] lets the dock enter
 /// its move mode for that app.
 Future<void> showAppMenu(BuildContext context, AppInfo app, {VoidCallback? onMove}) {

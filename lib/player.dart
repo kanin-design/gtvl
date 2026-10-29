@@ -12,10 +12,22 @@ import 'aerials.dart';
 /// the next one buffers, and none at all while another app is in front, so
 /// that app gets the hardware video decoders and the memory.
 class ScenePlayer extends StatefulWidget {
-  const ScenePlayer({super.key, required this.next, this.onShowing, this.speed = 1, this.maxLength});
+  const ScenePlayer({
+    super.key,
+    required this.next,
+    this.source,
+    this.onShowing,
+    this.speed = 1,
+    this.maxLength,
+    this.loop = false,
+  });
 
   /// The scene after [previous]; null [previous] means starting.
-  final Scene? Function(Scene? previous) next;
+  final FutureOr<Scene?> Function(Scene? previous) next;
+
+  /// What [next] chooses from. When it changes, the scene playing goes on
+  /// until the next one, from the new choice, can fade in over it.
+  final Object? source;
 
   /// Called when a scene starts fading in.
   final ValueChanged<Scene>? onShowing;
@@ -25,6 +37,9 @@ class ScenePlayer extends StatefulWidget {
 
   /// Moves on after this much of a scene; null plays each scene to its end.
   final Duration? maxLength;
+
+  /// Each scene loops seamlessly until [maxLength] has passed.
+  final bool loop;
 
   @override
   State<ScenePlayer> createState() => _ScenePlayerState();
@@ -36,6 +51,9 @@ class _Layer {
   final Scene scene;
   final VideoPlayerController video;
   bool shown = false;
+
+  /// Runs from when the scene starts fading in.
+  final played = Stopwatch();
 }
 
 class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
@@ -57,13 +75,21 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _start();
+    if (_inFront) _start();
   }
+
+  /// Nothing plays while another app is in front; coming back starts it.
+  static bool get _inFront => switch (WidgetsBinding.instance.lifecycleState) {
+    AppLifecycleState.hidden || AppLifecycleState.paused || AppLifecycleState.detached => false,
+    _ => true,
+  };
 
   @override
   void didUpdateWidget(ScenePlayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.speed != widget.speed) _now?.video.setPlaybackSpeed(widget.speed);
+    if (oldWidget.loop != widget.loop) _now?.video.setLooping(widget.loop || _now!.scene.loop);
+    if (oldWidget.source != widget.source) _switch();
   }
 
   @override
@@ -90,11 +116,21 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
     }
   }
 
-  void _start() {
+  void _start([Scene? after]) {
     final run = _run;
-    _prepare(null).then((layer) {
+    _prepare(after).then((layer) {
       if (layer != null && run == _run) _show(layer);
     });
+  }
+
+  /// A new choice of scenes: drops the next scene, if one was ready, and
+  /// fades in the one after the current scene by the new choice.
+  void _switch() {
+    _run++;
+    _preparing = false;
+    _next?.video.dispose();
+    _next = null;
+    if (_inFront) _start(_now?.scene);
   }
 
   void _release() {
@@ -115,19 +151,22 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
     final run = _run;
     try {
       for (var attempt = 0; attempt < _attempts; attempt++) {
-        final scene = widget.next(previous);
-        if (scene == null) return null;
+        final scene = await widget.next(previous);
+        if (scene == null || run != _run) return null;
         previous = scene;
         // A wallpaper must never take audio focus from what else is playing.
         final options = VideoPlayerOptions(mixWithOthers: true);
+        // Dolby Vision shows only on a real video surface; drawn into a
+        // texture, it comes out green. The glass can't blur such a surface.
+        final view = scene.hdr ? VideoViewType.platformView : VideoViewType.textureView;
         final video = scene.file
-            ? VideoPlayerController.file(File(scene.uri), videoPlayerOptions: options)
-            : VideoPlayerController.networkUrl(Uri.parse(scene.uri), videoPlayerOptions: options);
+            ? VideoPlayerController.file(File(scene.uri), videoPlayerOptions: options, viewType: view)
+            : VideoPlayerController.networkUrl(Uri.parse(scene.uri), videoPlayerOptions: options, viewType: view);
         try {
           await video.initialize();
           await video.setVolume(0);
           if (widget.speed != 1) await video.setPlaybackSpeed(widget.speed);
-          if (scene.loop) await video.setLooping(true);
+          if (scene.loop || widget.loop) await video.setLooping(true);
           if (run != _run || !mounted) {
             await video.dispose();
             return null;
@@ -146,11 +185,18 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
 
   /// Fades [layer] in over the current scene, then releases the old one.
   void _show(_Layer layer) {
+    // A new choice can arrive mid-fade: the scene fading out goes at once.
+    final gone = _out;
+    if (gone != null) {
+      gone.video.removeListener(_tick);
+      gone.video.dispose();
+    }
     final old = _now;
     _out = old;
     _now = layer;
     _next = null;
     _fading = true;
+    layer.played.start();
     layer.video
       ..addListener(_tick)
       ..play();
@@ -176,8 +222,10 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
     final value = now.video.value;
     if (!value.isInitialized || value.duration == Duration.zero) return;
     final max = widget.maxLength;
-    final end = max != null && max < value.duration ? max : value.duration;
-    final left = end - value.position;
+    // A looping scene runs out its time; any other ends with its video, or sooner.
+    final left = widget.loop && max != null
+        ? max - now.played.elapsed
+        : (max != null && max < value.duration ? max : value.duration) - value.position;
 
     if (left <= _lead && _next == null && !_preparing) {
       final run = _run;

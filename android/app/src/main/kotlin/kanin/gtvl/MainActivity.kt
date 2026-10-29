@@ -1,6 +1,7 @@
 package kanin.gtvl
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
@@ -11,6 +12,11 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.media.MediaCodecInfo.CodecProfileLevel
+import android.media.MediaCodecList
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -24,10 +30,15 @@ import android.os.UserHandle
 import android.os.storage.StorageManager
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.view.Display
+import android.view.InputDevice
+import android.view.KeyEvent
+import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -55,17 +66,36 @@ class MainActivity : FlutterActivity() {
                 "tile" -> inBackground(result) { tile(arg!!) }
                 "icon" -> inBackground(result) { tile(arg!!, square = true) }
                 "vpnApps" -> inBackground(result) { vpnApps() }
-                "storage" -> storage(result)
-                "launch" -> result.success(launch(arg!!))
-                "appInfo" -> result.success(start(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$arg"))))
-                "uninstall" -> result.success(start(Intent(Intent.ACTION_DELETE, Uri.parse("package:$arg"))))
-                "settings" -> result.success(start(Intent(arg ?: Settings.ACTION_SETTINGS)))
+                "storage" -> storage(result, videos = arg == "videos")
+                "hdr" -> inBackground(result) { hdrQualities() }
+                "videoFrame" -> inBackground(result) { videoFrame(arg!!) }
+                "isHdr" -> inBackground(result) { isHdr(arg!!) }
+                "canPlay" -> inBackground(result) { canPlay(arg!!) }
+                "launch" -> result.success(launchApp(arg!!))
+                "appInfo" -> result.success(startNew(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$arg"))))
+                "uninstall" -> result.success(startNew(Intent(Intent.ACTION_DELETE, Uri.parse("package:$arg"))))
+                "settings" -> result.success(startNew(Intent(arg ?: Settings.ACTION_SETTINGS)))
+                "buttons" -> result.success(mapOf(
+                    "on" to (ButtonService.instance != null),
+                    "remotes" to remotes((call.arguments as? List<*>)?.filterIsInstance<String>().orEmpty()),
+                ))
+                "remap" -> {
+                    ButtonService.remaps = ButtonService.parse(JSONObject(arg ?: "{}"))
+                    result.success(null)
+                }
+                "findButton" -> ButtonService.instance?.find(result::success) ?: result.success(null)
+                "stopFinding" -> {
+                    ButtonService.instance?.stopFinding()
+                    result.success(null)
+                }
+                "buttonSettings" -> result.success(buttonSettings())
                 else -> result.notImplemented()
             }
         }
         EventChannel(messenger, "gtvl/events").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
                 events = sink
+                ButtonService.onChange = { events?.success(mapOf("type" to "buttons")) }
                 launcherApps.registerCallback(appsCallback, mainThread)
                 connectivity.registerDefaultNetworkCallback(networkCallback, mainThread)
             }
@@ -73,15 +103,20 @@ class MainActivity : FlutterActivity() {
             override fun onCancel(arguments: Any?) {
                 launcherApps.unregisterCallback(appsCallback)
                 connectivity.unregisterNetworkCallback(networkCallback)
+                ButtonService.onChange = null
                 events = null
             }
         })
     }
 
-    /** Home pressed while the launcher is already open: go back to the dock. */
+    /**
+     * Home pressed while the launcher is already open: go back to the dock.
+     * A remapped button can also ask for settings or all apps ([OPEN]).
+     */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.hasCategory(Intent.CATEGORY_HOME)) events?.success(mapOf("type" to "home"))
+        intent.getStringExtra(OPEN)?.let { events?.success(mapOf("type" to "open", "what" to it)) }
     }
 
     override fun onDestroy() {
@@ -214,17 +249,106 @@ class MainActivity : FlutterActivity() {
         return if (square) Rect(left, top, right + 1, bottom + 1) else null
     }
 
-    /** Reading pictures, a permission Android 13 renamed. */
-    private val readPictures =
-        if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+    /**
+     * The HDR aerial qualities this TV can show. The films are Dolby Vision
+     * profile 5 at 30 fps, which needs a decoder for it at 1080p or 4K and a
+     * screen that takes Dolby Vision.
+     */
+    private fun hdrQualities(): List<String> {
+        @Suppress("DEPRECATION")
+        val types = windowManager.defaultDisplay.hdrCapabilities?.supportedHdrTypes ?: intArrayOf()
+        if (Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION !in types) return emptyList()
+        val level = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { !it.isEncoder && MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION in it.supportedTypes }
+            .flatMap { it.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION).profileLevels.asList() }
+            .filter { it.profile == CodecProfileLevel.DolbyVisionProfileDvheStn }
+            .maxOfOrNull { it.level } ?: 0
+        return buildList {
+            if (level >= CodecProfileLevel.DolbyVisionLevelFhd30) add("1080p_hdr")
+            if (level >= CodecProfileLevel.DolbyVisionLevelUhd30) add("4k_hdr")
+        }
+    }
+
+    /**
+     * A JPEG of a frame from the video at [path], a little way in since many
+     * videos open on black, cached until the file changes. Null if the video
+     * can't be read.
+     */
+    private fun videoFrame(path: String): String? {
+        val video = File(path)
+        if (!video.canRead()) return null
+        val file = File(File(cacheDir, "frames").apply { mkdirs() }, "${path.hashCode().toUInt()}_${video.lastModified()}.jpg")
+        if (file.exists()) return file.path
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(path)
+            val length = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
+            val at = minOf(length / 10, 2000) * 1000
+            val frame = if (Build.VERSION.SDK_INT >= 27) {
+                retriever.getScaledFrameAtTime(at, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
+            } else {
+                retriever.getFrameAtTime(at, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?.let { Bitmap.createScaledBitmap(it, 480, 480 * it.height / it.width, true) }
+            } ?: return null
+            file.outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            frame.recycle()
+            file.path
+        } catch (e: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
+    }
+
+    /** Whether the video at [path] is Dolby Vision, HDR10 or HLG. */
+    private fun isHdr(path: String): Boolean {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(path)
+            (0 until extractor.trackCount).map(extractor::getTrackFormat).any { format ->
+                format.getString(MediaFormat.KEY_MIME) == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION ||
+                    format.containsKey(MediaFormat.KEY_COLOR_TRANSFER) &&
+                    format.getInteger(MediaFormat.KEY_COLOR_TRANSFER) in
+                    listOf(MediaFormat.COLOR_TRANSFER_ST2084, MediaFormat.COLOR_TRANSFER_HLG)
+            }
+        } catch (e: Exception) {
+            false
+        } finally {
+            extractor.release()
+        }
+    }
+
+    /** Whether this TV has a decoder for the video at [path]; true when that can't be told. */
+    private fun canPlay(path: String): Boolean {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(path)
+            val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            (0 until extractor.trackCount).map(extractor::getTrackFormat)
+                .filter { it.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+                .all { codecs.findDecoderForFormat(it) != null }
+        } catch (e: Exception) {
+            true
+        } finally {
+            extractor.release()
+        }
+    }
+
+    /** Reading pictures or videos: one permission until Android 13 split and renamed it. */
+    private fun readPermission(videos: Boolean) = when {
+        Build.VERSION.SDK_INT < 33 -> Manifest.permission.READ_EXTERNAL_STORAGE
+        videos -> Manifest.permission.READ_MEDIA_VIDEO
+        else -> Manifest.permission.READ_MEDIA_IMAGES
+    }
     private var storageAnswer: MethodChannel.Result? = null
 
-    /** Answers with [volumes] once reading pictures is allowed, asking the user if needed; null if refused. */
-    private fun storage(result: MethodChannel.Result) {
-        if (checkSelfPermission(readPictures) == PackageManager.PERMISSION_GRANTED) return result.success(volumes())
+    /** Answers with [volumes] once reading pictures or [videos] is allowed, asking the user if needed; null if refused. */
+    private fun storage(result: MethodChannel.Result, videos: Boolean) {
+        val permission = readPermission(videos)
+        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return result.success(volumes())
         storageAnswer?.success(null)
         storageAnswer = result
-        requestPermissions(arrayOf(readPictures), STORAGE_REQUEST)
+        requestPermissions(arrayOf(permission), STORAGE_REQUEST)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -263,18 +387,50 @@ class MainActivity : FlutterActivity() {
         return bitmap
     }
 
-    private fun launch(pkg: String): Boolean {
-        val intent = packageManager.getLeanbackLaunchIntentForPackage(pkg)
-            ?: packageManager.getLaunchIntentForPackage(pkg)
-            ?: return false
-        return start(intent)
+    /**
+     * Remotes connected now, as {id, name, keys}: which of [keys] (Android's
+     * names for them) each one has. The TV's own buttons and virtual devices
+     * are left out.
+     */
+    private fun remotes(keys: List<String>): List<Map<String, Any>> {
+        val codes = keys.map { KeyEvent.keyCodeFromString("KEYCODE_$it") }.toIntArray()
+        return InputDevice.getDeviceIds().toList().mapNotNull(InputDevice::getDevice)
+            .filter {
+                !it.isVirtual && (Build.VERSION.SDK_INT < 29 || it.isExternal) &&
+                    it.supportsSource(InputDevice.SOURCE_KEYBOARD)
+            }
+            .distinctBy(ButtonService::remoteId)
+            .map { device ->
+                val has = device.hasKeys(*codes)
+                mapOf(
+                    "id" to ButtonService.remoteId(device),
+                    "name" to device.name,
+                    "keys" to keys.filterIndexed { i, _ -> codes[i] != KeyEvent.KEYCODE_UNKNOWN && has[i] },
+                )
+            }
     }
 
-    private fun start(intent: Intent): Boolean = try {
-        startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        true
-    } catch (e: Exception) {
-        false
+    /**
+     * Android's switch for GTVL buttons: its own page where the TV has one,
+     * else accessibility settings, else all settings. TVs send the pages they
+     * lack to a stub that only says so.
+     */
+    private fun buttonSettings(): Boolean {
+        val service = ComponentName(this, ButtonService::class.java).flattenToString()
+        val pages = listOf(
+            Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").putExtra(Intent.EXTRA_COMPONENT_NAME, service),
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS),
+        )
+        val page = pages.firstOrNull { resolve(it)?.activityInfo?.packageName.let { pkg -> pkg != null && pkg != STUBS } }
+            ?: pages.last()
+        if (!startNew(page)) return false
+        // Short of the switch itself, the way to it stays on screen a while (two toasts, about 7 s).
+        if (page != pages.first()) {
+            val path = if (Build.VERSION.SDK_INT >= 31) R.string.buttons_path_system else R.string.buttons_path
+            repeat(2) { Toast.makeText(this, path, Toast.LENGTH_LONG).show() }
+        }
+        return true
     }
 
     /** Launchable apps that provide a VPN service. */
@@ -339,7 +495,10 @@ class MainActivity : FlutterActivity() {
         ))
     }
 
-    private companion object {
-        const val STORAGE_REQUEST = 1
+    companion object {
+        /** An extra asking the launcher to open "settings" or "apps". */
+        const val OPEN = "kanin.gtvl.OPEN"
+        private const val STORAGE_REQUEST = 1
+        private const val STUBS = "com.google.android.tv.frameworkpackagestubs"
     }
 }

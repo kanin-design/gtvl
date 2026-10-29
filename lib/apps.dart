@@ -58,6 +58,9 @@ class AppsModel extends ChangeNotifier {
 
   List<AppInfo> get hidden => [for (final package in _config.hidden) ?_apps[package]];
 
+  /// Every app, hidden ones too, by name.
+  Iterable<AppInfo> get all => _apps.values;
+
   Future<void> load() async {
     final found = [
       for (final m in await Native.apps())

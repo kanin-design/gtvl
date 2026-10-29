@@ -1,10 +1,15 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
+import 'buttons.dart';
+import 'media.dart';
+import 'menu.dart' show showButtonsPrompt;
 import 'native.dart';
-import 'pictures.dart';
 import 'services.dart';
 import 'ui.dart';
 import 'wallpaper.dart';
@@ -20,6 +25,7 @@ enum _Section {
   dock('Dock', Icons.view_day_outlined),
   topBar('Top bar', Icons.space_dashboard_outlined),
   apps('Apps', Icons.apps),
+  buttons('Buttons', Icons.settings_remote_outlined),
   android('Android settings', Icons.settings_outlined),
   about('About', Icons.info_outline);
 
@@ -45,6 +51,7 @@ const _arrangements = [
   ('between', 'Edge to edge'),
 ];
 const _pictureEvery = [(1, 'Every minute'), (5, 'Every 5 minutes'), (15, 'Every 15 minutes'), (60, 'Every hour')];
+const _videoLoops = [(0, 'Off'), (1, 'For 1 minute'), (5, 'For 5 minutes'), (15, 'For 15 minutes')];
 const _blurs = [(0.0, 'Off'), (8.0, 'Subtle'), (16.0, 'Medium'), (24.0, 'Strong'), (40.0, 'Heavy')];
 const _tints = [
   (0xFFFFFFFF, 'Frost'),
@@ -75,10 +82,16 @@ const _quiet = Color(0x73FFFFFF);
 /// One level of settings: its title and rows. Rows are built afresh each
 /// time, so they always show current values.
 class _Page {
-  _Page(this.title, this.rows);
+  _Page(this.title, this.rows, {this.wide = false, this.onClose});
 
   final String title;
   final List<Widget> Function() rows;
+
+  /// Holds previews, so it opens wider.
+  final bool wide;
+
+  /// Called when the level closes, however it closes.
+  final VoidCallback? onClose;
 
   /// The row that opened the next level, highlighted while that level is open.
   String? opened;
@@ -126,18 +139,52 @@ class _SettingsPanelState extends State<SettingsPanel> {
   /// The top-bar icon being moved, if any.
   String? _moving;
 
-  /// Wallpapers to download, once found.
-  List<({String name, String url})>? _online;
-  Future<void>? _finding;
+  /// GTVL's collection online, by kind, once found.
+  final _online = <MediaKind, List<OnlineMedia>>{};
+  final _finding = <MediaKind, Future<void>>{};
 
-  /// The wallpaper downloading now, and the last one that failed.
-  String? _downloading, _failed;
+  /// Downloads under way, as url to how much is done (0 to 1), and those that
+  /// failed.
+  final _downloading = <String, double>{};
+  final _failed = <String>{};
 
-  /// The user did not allow reading pictures.
-  bool _storageDenied = false;
+  /// Videos this TV can't play, by url or path.
+  final _unplayable = <String>{};
+
+  /// Kinds the user did not allow GTVL to read from storage.
+  final _denied = <MediaKind>{};
+
+  /// What a gallery shows from storage: what was chosen when it opened, plus
+  /// anything chosen since, so one dropped stays in place to pick again.
+  final _fromStorage = <MediaKind, List<String>>{};
+
+  /// Video frames and folders' first files, looked up once each.
+  final _frames = <String, Future<String?>>{};
+  final _firstFiles = <String, Future<String?>>{};
+
+  /// Whether the button service is on, and the remotes connected, once asked.
+  ({bool on, List<({String id, String name, List<String> keys})> remotes})? _buttons;
+  StreamSubscription<Object?>? _buttonEvents;
+
+  /// Coming back from Android settings, where the button service is turned on.
+  late final _lifecycle = AppLifecycleListener(
+    onResume: () {
+      if (_section == _Section.buttons) _refreshButtons();
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _buttonEvents = Native.events.where((event) => event['type'] == 'buttons').listen((_) => _refreshButtons());
+    _lifecycle;
+  }
 
   @override
   void dispose() {
+    _closeAll();
+    _buttonEvents?.cancel();
+    _lifecycle.dispose();
     for (final node in _sectionNodes.values) {
       node.dispose();
     }
@@ -151,6 +198,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       Native.openSettings();
       return;
     }
+    _closeAll();
     setState(() {
       _section = section;
       _pages
@@ -158,12 +206,21 @@ class _SettingsPanelState extends State<SettingsPanel> {
         ..add(_Page(section.label, () => _rowsFor(section)));
       _moving = null;
     });
+    if (section == _Section.buttons) _refreshButtons(prompt: focus);
     if (focus) _focusRow();
   }
 
-  /// Opens [page] beside the current level, which folds.
-  void _push(_Page page) {
-    final opener = _labelOf(FocusManager.instance.primaryFocus);
+  /// Lets every open level know it closes.
+  void _closeAll() {
+    for (final page in _pages) {
+      page.onClose?.call();
+    }
+  }
+
+  /// Opens [page] beside the current level, which folds; [from] is the row
+  /// that opened it, when that isn't the focused one.
+  void _push(_Page page, {String? from}) {
+    final opener = from ?? _labelOf(FocusManager.instance.primaryFocus);
     setState(() {
       _pages.last.opened = opener;
       _pages.add(page);
@@ -175,11 +232,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
     if (_moving != null) {
       setState(() => _moving = null);
     } else if (_pages.length > 1) {
+      final closing = _pages.last;
       setState(_pages.removeLast);
+      closing.onClose?.call();
       // Back on the row that opened the level just closed.
       _focusRow(_pages.last.opened);
     } else if (_section != null) {
       final section = _section!;
+      _closeAll();
       setState(() {
         _section = null;
         _pages.clear();
@@ -192,7 +252,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
   /// else its first row; with no rows, the level itself, so Left still works.
   void _focusRow([String? label]) => WidgetsBinding.instance.addPostFrameCallback((_) {
     final rows = _active.traversalDescendants;
-    (rows.where((node) => _labelOf(node) == label).firstOrNull ?? rows.firstOrNull ?? _active).requestFocus();
+    final match = label == null ? null : rows.where((node) => _labelOf(node) == label).firstOrNull;
+    (match ?? rows.firstOrNull ?? _active).requestFocus();
   });
 
   /// The label of the row [node] belongs to.
@@ -206,6 +267,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
     T Function() current,
     void Function(T value) apply, {
     List<Color> Function(T value)? swatch,
+    bool Function(T value)? enabled,
+    String? note,
   }) => _push(
     _Page(title, () {
       final now = current();
@@ -215,11 +278,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
             label,
             checked: value == now,
             swatch: swatch?.call(value),
+            enabled: enabled?.call(value) ?? true,
             onPressed: () {
               apply(value);
               s.config.changed();
             },
           ),
+        if (note != null) _Note(note),
       ];
     }),
   );
@@ -244,6 +309,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.arrowLeft || _moving != null) {
       return KeyEventResult.ignored;
     }
+    // Among previews, Left first moves to the one beside.
+    if (FocusManager.instance.primaryFocus?.focusInDirection(TraversalDirection.left) ?? false) {
+      return KeyEventResult.handled;
+    }
     if (_pages.length > 1) {
       _back();
     } else {
@@ -258,7 +327,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     final listWidth = screen * 0.25;
     const railWidth = 66.0;
     final foldedWidth = screen * 0.16;
-    final pageWidth = screen * 0.3;
+    final pageWidth = screen * ((_pages.lastOrNull?.wide ?? false) ? 0.42 : 0.3);
     // At most two folded levels show; older ones make way.
     final folded = _pages.length <= 1 ? <_Page>[] : _pages.sublist((_pages.length - 3).clamp(0, 99), _pages.length - 1);
     final open = _section != null;
@@ -385,6 +454,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _Section.dock => _dockRows(),
     _Section.topBar => _topBarRows(),
     _Section.apps => _appRows(),
+    _Section.buttons => _buttonRows(),
     _Section.about => _aboutRows(),
     _Section.android => const [],
   };
@@ -392,45 +462,22 @@ class _SettingsPanelState extends State<SettingsPanel> {
   /// Choosing a kind shows it and opens its own settings beside it.
   List<Widget> _wallpaperRows() {
     final c = s.config;
-    void show(String kind, _Page page) {
-      c.wallpaper = kind;
-      if (kind != 'aerials') s.caption.value = null;
-      c.changed();
-      _push(page);
-    }
-
     return [
       const _Header('Show'),
       _Row(
         'Apple aerials',
         checked: c.wallpaper == 'aerials',
         chevron: true,
-        onPressed: () => show('aerials', _Page('Apple aerials', _aerialRows)),
+        onPressed: () => _show('aerials', _Page('Apple aerials', _aerialRows)),
       ),
+      _galleryRow(MediaKind.videos),
+      _galleryRow(MediaKind.pictures),
       _Row(
         'Gradient',
         checked: c.wallpaper == 'gradient',
         chevron: true,
-        onPressed: () => show('gradient', _Page('Gradient', _gradientRows)),
+        onPressed: () => _show('gradient', _Page('Gradient', _gradientRows)),
       ),
-      _Row(
-        'Picture',
-        checked: c.wallpaper == 'image',
-        chevron: true,
-        onPressed: () {
-          _findOnline();
-          final page = _Page('Picture', _pictureRows);
-          // Without a picture yet, one is chosen first.
-          c.imagePath == null ? _push(page) : show('image', page);
-        },
-      ),
-      if (c.videoPath != null)
-        _Row(
-          'Video',
-          checked: c.wallpaper == 'video',
-          chevron: true,
-          onPressed: () => show('video', _Page('Video', () => [_Note(c.videoPath!)])),
-        ),
       const _Header('Look'),
       _Row(
         'Dimming',
@@ -438,64 +485,221 @@ class _SettingsPanelState extends State<SettingsPanel> {
         chevron: true,
         onPressed: () => _choose('Dimming', _dimming, () => c.dimming, (v) => c.dimming = v),
       ),
-      if (c.videoPath == null) const _Note('For a video, set "videoPath" in config.json.'),
     ];
   }
 
-  /// Looks for the wallpapers to download, once per visit to settings.
-  void _findOnline() => _finding ??= Pictures.online().then((found) {
-    if (mounted) setState(() => _online = found);
+  /// Shows [kind] of wallpaper and opens its settings beside the list.
+  void _show(String kind, _Page page) {
+    final c = s.config;
+    c.wallpaper = kind;
+    if (kind != 'aerials') s.caption.value = null;
+    c.changed();
+    _push(page);
+  }
+
+  /// Videos or pictures: a gallery to pick from. With some picked already,
+  /// they show at once.
+  Widget _galleryRow(MediaKind kind) => _Row(
+    kind.label,
+    checked: s.config.wallpaper == kind.wallpaper,
+    chevron: true,
+    onPressed: () {
+      _findOnline(kind);
+      _fromStorage[kind] = [
+        for (final path in _chosen(kind))
+          if (!_isDownload(path)) path,
+      ];
+      final page = _Page(kind.label, () => _galleryRows(kind), wide: true);
+      _chosen(kind).isEmpty ? _push(page) : _show(kind.wallpaper, page);
+    },
+  );
+
+  /// What [kind] shows when it is the wallpaper.
+  List<String> _chosen(MediaKind kind) => kind == MediaKind.pictures ? s.config.pictures : s.config.videos;
+
+  /// A file downloaded from the collection, not one from storage.
+  bool _isDownload(String path) => path.startsWith('${s.files}/');
+
+  /// Looks for the collection of [kind], once per visit to settings.
+  void _findOnline(MediaKind kind) => _finding[kind] ??= Media.online(kind).then((found) {
+    if (mounted) setState(() => _online[kind] = found);
   });
 
-  /// A picture or folder from storage, or a wallpaper from GTVL's collection,
-  /// downloaded when chosen.
-  List<Widget> _pictureRows() {
+  /// GTVL's collection and what was chosen from storage, as previews: OK
+  /// picks one or drops it. One alone stays on (a video loops); several
+  /// take turns.
+  List<Widget> _galleryRows(MediaKind kind) {
     final c = s.config;
-    final path = c.wallpaper == 'image' ? c.imagePath : null;
-    final fromStorage = path != null && !path.startsWith(s.files);
+    final videos = kind == MediaKind.videos;
+    final chosen = _chosen(kind);
+    final online = _online[kind];
+    final fromStorage = _fromStorage.putIfAbsent(kind, () => []);
+    for (final path in chosen) {
+      if (!_isDownload(path) && !fromStorage.contains(path)) fromStorage.add(path);
+    }
+    final several = chosen.length > 1 || chosen.any((path) => !kind.matches(path));
+    final shuffle = videos ? c.videoShuffle : c.pictureShuffle;
     return [
-      _Row(
-        'From storage',
-        value: fromStorage ? _short(Pictures.name(path)) : null,
-        chevron: true,
-        onPressed: _openStorage,
-      ),
-      if (_storageDenied)
-        const _Note('GTVL may not read your pictures. Allow it in Android settings, under Apps › GTVL › Permissions.'),
-      if (fromStorage && !Pictures.isPicture(path))
+      _Row('Browse storage', chevron: true, onPressed: () => _openStorage(kind)),
+      if (_denied.contains(kind))
+        _Note(
+          'GTVL may not read your ${kind.label.toLowerCase()}. Allow it in Android settings, under Apps › GTVL › Permissions.',
+        ),
+      if (videos)
+        _Row(
+          'Loop each video',
+          value: _label(_videoLoops, c.videoLoopMinutes),
+          chevron: true,
+          enabled: several,
+          onPressed: () => _choose(
+            'Loop each video',
+            _videoLoops,
+            () => c.videoLoopMinutes,
+            (v) => c.videoLoopMinutes = v,
+            note: 'How long each video loops before the next one fades in. Off plays each once.',
+          ),
+        )
+      else
         _Row(
           'Change every',
           value: _label(_pictureEvery, c.pictureMinutes),
           chevron: true,
+          enabled: several,
           onPressed: () => _choose('Change every', _pictureEvery, () => c.pictureMinutes, (v) => c.pictureMinutes = v),
         ),
-      const _Header('Download'),
-      if (_online == null)
-        const _Note('Looking for wallpapers…')
-      else if (_online!.isEmpty)
-        const _Note('The wallpaper collection could not be reached.')
+      _Row(
+        'Shuffle',
+        toggle: shuffle,
+        enabled: several,
+        onPressed: () {
+          if (videos) {
+            c.videoShuffle = !shuffle;
+          } else {
+            c.pictureShuffle = !shuffle;
+          }
+          c.changed();
+        },
+      ),
+      const _Header('GTVL collection'),
+      if (online == null)
+        const _Note('Looking for the collection…')
+      else if (online.isEmpty)
+        const _Note('The collection could not be reached.')
       else
-        for (final wallpaper in _online!)
-          _Row(
-            wallpaper.name,
-            key: ValueKey(wallpaper.url),
-            value: wallpaper.url == _downloading
-                ? 'Downloading…'
-                : (wallpaper.url == _failed ? 'Could not download' : null),
-            checked: path == Pictures.saved(wallpaper.url, s.files),
-            onPressed: () => _download(wallpaper.url),
-          ),
+        ..._grid([for (final item in online) _onlineThumb(kind, item)]),
+      if (fromStorage.isNotEmpty) ...[
+        const _Header('From storage'),
+        ..._grid([for (final path in fromStorage) _storageThumb(kind, path)]),
+      ],
+      _Note(
+        videos
+            ? 'OK picks a video or drops it. One alone loops seamlessly; several take turns, with a crossfade between. '
+                  'Videos from the collection download when picked.'
+            : 'OK picks a picture or drops it. Several take turns, with a crossfade between. '
+                  'Pictures from the collection download when picked.',
+      ),
     ];
   }
 
+  /// A file in GTVL's collection, previewed from the collection itself.
+  Widget _onlineThumb(MediaKind kind, OnlineMedia item) {
+    final path = Media.saved(item.url, s.files, kind);
+    final picked = _chosen(kind).contains(path);
+    final done = _downloading[item.url];
+    return _Thumb(
+      item.name,
+      key: ValueKey(item.url),
+      picture: Image.network(
+        item.preview,
+        fit: BoxFit.cover,
+        frameBuilder: _fadeIn,
+        // A picture without a preview of its own previews itself.
+        errorBuilder: (context, _, _) => kind == MediaKind.pictures
+            ? Image.network(item.url, fit: BoxFit.cover, cacheWidth: 480, frameBuilder: _fadeIn, errorBuilder: _blank)
+            : const SizedBox.shrink(),
+      ),
+      checked: picked,
+      status: switch (item.url) {
+        _ when done != null => 'Downloading',
+        final url when _unplayable.contains(url) => "This TV can't play it",
+        final url when _failed.contains(url) => 'Could not download',
+        _ => null,
+      },
+      progress: done,
+      onPressed: done != null || _unplayable.contains(item.url)
+          ? null
+          : () => picked ? _drop(kind, path) : _download(kind, item.url),
+    );
+  }
+
+  /// A file or folder chosen from storage.
+  Widget _storageThumb(MediaKind kind, String path) {
+    final folder = !kind.matches(path);
+    final picked = _chosen(kind).contains(path);
+    return _Thumb(
+      folder ? Media.name(path) : Media.stem(path),
+      key: ValueKey(path),
+      picture: folder ? _folderPreview(kind, path) : _preview(kind, path),
+      folder: folder,
+      checked: picked,
+      status: _unplayable.contains(path) ? "This TV can't play it" : null,
+      onPressed: () => picked ? _drop(kind, path) : _pickPlayable(kind, path),
+    );
+  }
+
+  /// Adds [path] to what [kind] shows, and shows that kind. A folder takes
+  /// the place of files picked in it.
+  void _pick(MediaKind kind, String path) {
+    final c = s.config;
+    final chosen = _chosen(kind);
+    if (!kind.matches(path)) {
+      chosen.removeWhere((file) => file.startsWith('$path/') && !file.substring(path.length + 1).contains('/'));
+    }
+    if (!chosen.contains(path)) chosen.add(path);
+    c.wallpaper = kind.wallpaper;
+    s.caption.value = null;
+    c.changed();
+  }
+
+  /// Picks [path], unless it is a video this TV can't play.
+  Future<void> _pickPlayable(MediaKind kind, String path) async {
+    if (kind == MediaKind.videos && kind.matches(path) && !await Native.canPlay(path)) {
+      if (mounted) setState(() => _unplayable.add(path));
+      return;
+    }
+    _pick(kind, path);
+  }
+
+  /// Takes [path] out of what [kind] shows. A download from the collection
+  /// is deleted; it comes again if picked again.
+  void _drop(MediaKind kind, String path) {
+    _chosen(kind).remove(path);
+    s.config.changed();
+    if (_isDownload(path)) Media.forget(path);
+  }
+
+  /// Drops [file] from [folder], chosen whole: its other [files] stay, picked
+  /// one by one.
+  void _dropFromFolder(MediaKind kind, String folder, String file, List<String> files) {
+    final chosen = _chosen(kind)..remove(folder);
+    chosen.addAll(files.where((other) => other != file && !chosen.contains(other)));
+    s.config.changed();
+  }
+
   /// The TV's storage and any USB drives, once the user allows reading
-  /// pictures. With only one, its folders open at once.
-  Future<void> _openStorage() async {
-    final volumes = await Native.storage();
+  /// [kind]. With only one, its folders open at once.
+  Future<void> _openStorage(MediaKind kind) async {
+    final volumes = await Native.storage(videos: kind == MediaKind.videos);
     if (!mounted) return;
-    setState(() => _storageDenied = volumes == null);
+    setState(() {
+      if (volumes == null) {
+        _denied.add(kind);
+      } else {
+        _denied.remove(kind);
+      }
+    });
     if (volumes == null || volumes.isEmpty) return;
-    if (volumes.length == 1) return _openFolder(volumes.single.path, volumes.single.name);
+    if (volumes.length == 1) return _openFolder(kind, volumes.single.path, volumes.single.name);
     _push(
       _Page(
         'Storage',
@@ -505,72 +709,116 @@ class _SettingsPanelState extends State<SettingsPanel> {
               volume.name,
               key: ValueKey(volume.path),
               chevron: true,
-              onPressed: () => _openFolder(volume.path, volume.name),
+              onPressed: () => _openFolder(kind, volume.path, volume.name),
             ),
         ],
       ),
     );
   }
 
-  /// A folder's subfolders and pictures. A picture, or the whole folder shown
-  /// a picture at a time, can be the wallpaper.
-  Future<void> _openFolder(String path, String title) async {
-    final found = await Pictures.list(path);
+  /// A folder's subfolders, and previews of its files: OK picks one or drops
+  /// it, or all of them at once, which takes in files added later too.
+  Future<void> _openFolder(MediaKind kind, String path, String title) async {
+    final found = await Media.list(path, kind);
     if (!mounted) return;
+    final files = found.files;
     _push(
-      _Page(title, () {
-        final shown = s.config.wallpaper == 'image' ? s.config.imagePath : null;
-        final count = found.pictures.length;
+      _Page(title, wide: files.isNotEmpty, () {
+        final chosen = _chosen(kind);
+        final whole = chosen.contains(path);
         return [
-          if (count > 0)
+          if (files.isNotEmpty)
             _Row(
-              'Use this folder',
-              value: count == 1 ? '1 picture' : '$count pictures',
-              checked: shown == path,
-              onPressed: () => _usePicture(path),
+              'All in this folder',
+              value: kind.count(files.length),
+              toggle: whole,
+              onPressed: () => whole ? _drop(kind, path) : _pick(kind, path),
             ),
           for (final folder in found.folders)
             _Row(
-              Pictures.name(folder),
+              Media.name(folder),
               key: ValueKey(folder),
               chevron: true,
-              onPressed: () => _openFolder(folder, Pictures.name(folder)),
+              onPressed: () => _openFolder(kind, folder, Media.name(folder)),
             ),
-          for (final picture in found.pictures)
-            _Row(
-              Pictures.name(picture),
-              key: ValueKey(picture),
-              checked: shown == picture,
-              onPressed: () => _usePicture(picture),
-            ),
-          if (found.folders.isEmpty && count == 0) const _Note('No pictures or folders here.'),
+          ..._grid([
+            for (final file in files)
+              _Thumb(
+                Media.stem(file),
+                key: ValueKey(file),
+                picture: _preview(kind, file),
+                checked: whole || chosen.contains(file),
+                status: _unplayable.contains(file) ? "This TV can't play it" : null,
+                onPressed: () {
+                  if (whole) {
+                    _dropFromFolder(kind, path, file, files);
+                  } else if (chosen.contains(file)) {
+                    _drop(kind, file);
+                  } else {
+                    _pickPlayable(kind, file);
+                  }
+                },
+              ),
+          ]),
+          if (found.folders.isEmpty && files.isEmpty) _Note('No ${kind.label.toLowerCase()} or folders here.'),
         ];
       }),
     );
   }
 
-  /// Shows [path], a picture or a folder of them, as the wallpaper.
-  void _usePicture(String path) {
-    final c = s.config;
-    c.imagePath = path;
-    c.wallpaper = 'image';
-    s.caption.value = null;
-    c.changed();
-  }
+  /// [path] in small: the picture itself, or a frame of the video.
+  Widget _preview(MediaKind kind, String path) => kind == MediaKind.pictures
+      ? Image.file(File(path), fit: BoxFit.cover, cacheWidth: 480, frameBuilder: _fadeIn, errorBuilder: _blank)
+      : FutureBuilder(
+          future: _frames.putIfAbsent(path, () => Native.videoFrame(path)),
+          builder: (context, frame) => switch (frame.data) {
+            final String file => Image.file(File(file), fit: BoxFit.cover, frameBuilder: _fadeIn, errorBuilder: _blank),
+            _ => const SizedBox.shrink(),
+          },
+        );
 
-  /// Downloads a wallpaper from the collection, unless it is here already,
-  /// and shows it.
-  Future<void> _download(String url) async {
+  /// A folder in small: its first file.
+  Widget _folderPreview(MediaKind kind, String folder) => FutureBuilder(
+    future: _firstFiles.putIfAbsent(
+      '${kind.name} $folder',
+      () => Media.list(folder, kind).then((found) => found.files.firstOrNull),
+    ),
+    builder: (context, first) => switch (first.data) {
+      final String file => _preview(kind, file),
+      _ => const SizedBox.shrink(),
+    },
+  );
+
+  /// Downloads a file from the collection, unless it is here already, and
+  /// picks it.
+  Future<void> _download(MediaKind kind, String url) async {
     setState(() {
-      _downloading = url;
-      _failed = null;
+      _downloading[url] = 0;
+      _failed.remove(url);
     });
     try {
-      _usePicture(await Pictures.download(url, s.files));
+      final path = await Media.download(
+        url,
+        s.files,
+        kind,
+        onProgress: (done) {
+          // A step per percent, not a rebuild per chunk.
+          if (mounted && (done * 100).floor() > (_downloading[url]! * 100).floor()) {
+            setState(() => _downloading[url] = done);
+          }
+        },
+      );
+      if (kind == MediaKind.videos && !await Native.canPlay(path)) {
+        _unplayable.add(url);
+        await Media.forget(path);
+        return;
+      }
+      _pick(kind, path);
     } on Exception {
-      _failed = url;
+      _failed.add(url);
     } finally {
-      if (mounted) setState(() => _downloading = null);
+      _downloading.remove(url);
+      if (mounted) setState(() {});
     }
   }
 
@@ -582,7 +830,16 @@ class _SettingsPanelState extends State<SettingsPanel> {
         'Quality',
         value: _label(_qualities, c.aerialQuality),
         chevron: true,
-        onPressed: () => _choose('Quality', _qualities, () => c.aerialQuality, (v) => c.aerialQuality = v),
+        onPressed: () => _choose(
+          'Quality',
+          _qualities,
+          () => c.aerialQuality,
+          (v) => c.aerialQuality = v,
+          enabled: (v) => !v.endsWith('_hdr') || s.aerials.hdr.contains(v),
+          note: s.aerials.hdr.length == 2
+              ? "HDR films are Dolby Vision. The dock's glass can't blur them."
+              : "HDR films are Dolby Vision; this TV can't show the greyed-out ones.",
+        ),
       ),
       _Row(
         'Scenes',
@@ -818,8 +1075,210 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
+  /// Asks Android whether the button service is on and which remotes are
+  /// connected. With [prompt], asks the user to turn the service on if it is
+  /// off.
+  Future<void> _refreshButtons({bool prompt = false}) async {
+    final state = await Native.buttons(knownButtons.keys.toList());
+    if (!mounted) return;
+    setState(() => _buttons = state);
+    if (prompt && !state.on) showButtonsPrompt(context);
+  }
+
+  /// [action], or while the button service is off, asking to turn it on.
+  VoidCallback _whenOn(VoidCallback action) =>
+      () => (_buttons?.on ?? false) ? action() : showButtonsPrompt(context);
+
+  /// The remotes connected now and any with changes kept from before, each
+  /// with its buttons, then a way to find any other button.
+  List<Widget> _buttonRows() {
+    final state = _buttons;
+    if (state == null) return const [_Note('Looking for remotes…')];
+    final remotes = <String, (String, Set<String>)>{
+      for (final remote in state.remotes) remote.id: (remote.name, {...remote.keys}),
+    };
+    for (final (id, name, keys) in Remaps(s.config.remotes).saved) {
+      final (_, known) = remotes.putIfAbsent(id, () => (name, <String>{}));
+      known.addAll(keys);
+    }
+    return [
+      _Row(
+        'Remapping',
+        value: state.on ? 'On' : 'Off',
+        note: state.on ? null : 'Turn it on in Android settings first',
+        chevron: true,
+        onPressed: state.on ? Native.buttonSettings : () => showButtonsPrompt(context),
+      ),
+      for (final MapEntry(key: id, value: (name, keys)) in remotes.entries) ...[
+        _Header(name),
+        for (final key in inButtonOrder(keys)) _buttonRow(id, name, key),
+      ],
+      if (remotes.isEmpty) const _Note('No remote lists its buttons. Find a button by pressing it.'),
+      _Row('Find a button', chevron: true, onPressed: _whenOn(_findButton)),
+      const _Note('OK, the arrows and Power always do what they do.'),
+    ];
+  }
+
+  /// A button, with what it does instead, if anything.
+  Widget _buttonRow(String remote, String name, String key) {
+    final info = buttonInfo(remote, key);
+    final changes = Remaps(s.config.remotes).changes(remote, key);
+    final value = switch (changes) {
+      [] => null,
+      [('press', final action)] => _actionLabel(action),
+      [(final slot, final action)] => '${_slotLabel(slot)}: ${_actionLabel(action)}',
+      _ => '${changes.length} changes',
+    };
+    return _Row(
+      info.label,
+      key: ValueKey('$remote $key'),
+      value: value == null ? null : _short(value),
+      chevron: true,
+      onPressed: _whenOn(() => _push(_Page(info.label, () => _slotRows(remote, name, key)))),
+    );
+  }
+
+  /// What [key] on [remote] does when pressed, held or pressed twice.
+  List<Widget> _slotRows(String remote, String name, String key) {
+    final info = buttonInfo(remote, key);
+    final remaps = Remaps(s.config.remotes);
+    // A hold or double press holds the button back until it is clear which
+    // it was; then its own press must be made again, or be changed.
+    final timed = info.replay || remaps.action(remote, key, 'press') != null;
+    return [
+      for (final (slot, label) in slots)
+        if (!info.holdOnly || slot != 'double')
+          _Row(
+            label,
+            value: _short(_actionLabel(remaps.action(remote, key, slot))),
+            chevron: true,
+            enabled: slot == 'press' ? !info.holdOnly : timed,
+            onPressed: () => _pickAction(remote, name, key, slot, label),
+          ),
+      if (remaps.changes(remote, key).isNotEmpty)
+        _Row(
+          'Reset',
+          onPressed: () {
+            remaps.reset(remote, key);
+            _remapsChanged();
+            _focusRow();
+          },
+        ),
+      if (info.holdOnly)
+        _Note("${info.label} itself always works, so you can't get stuck. Only holding it can do something else."),
+      if (!timed)
+        _Note(
+          "Hold and double press need Press changed first: GTVL can't make ${info.label}'s own press "
+          'while it waits to see which you meant.',
+        ),
+      if (timed && !info.holdOnly) const _Note('With a double press set, a single press waits a moment for a second.'),
+      if (remote == shieldRemote && key == 'MENU')
+        const _Note("If the Shield's own Customize menu button setting is in use, leave ☰ alone here."),
+    ];
+  }
+
+  /// Picks what [slot] of [key] does: its own thing, nothing, an app, or one
+  /// of [actionGroups].
+  void _pickAction(String remote, String name, String key, String slot, String title) {
+    String? current() => Remaps(s.config.remotes).action(remote, key, slot);
+    void set(String? action) => _setAction(remote, name, key, slot, action);
+    _push(
+      _Page(title, () {
+        final now = current();
+        return [
+          _Row('Default', note: 'What the button does by itself', checked: now == null, onPressed: () => set(null)),
+          _Row('Nothing', checked: now == 'nothing', onPressed: () => set('nothing')),
+          _Row(
+            'Open an app',
+            value: now != null && now.startsWith('app:') ? _short(_actionLabel(now)) : null,
+            chevron: true,
+            onPressed: () => _choose(
+              'Open an app',
+              [for (final app in s.apps.all) ('app:${app.package}', app.label)],
+              () => current() ?? '',
+              set,
+            ),
+          ),
+          for (final (group, actions) in actionGroups)
+            _Row(
+              group,
+              value: actions.any((action) => action.$1 == now) ? _short(_actionLabel(now)) : null,
+              chevron: true,
+              onPressed: () => _choose(group, actions, () => current() ?? '', set),
+            ),
+        ];
+      }),
+    );
+  }
+
+  void _setAction(String remote, String name, String key, String slot, String? action) {
+    final remaps = Remaps(s.config.remotes)..set(remote, name, key, slot, action);
+    // A button whose own press can't be made again loses its hold and double
+    // press with its changed press.
+    if (slot == 'press' && action == null && !buttonInfo(remote, key).replay) {
+      remaps
+        ..set(remote, name, key, 'hold', null)
+        ..set(remote, name, key, 'double', null);
+    }
+    _remapsChanged();
+  }
+
+  /// Saves the remaps, and hands them to the button service at once.
+  void _remapsChanged() {
+    s.config.changed();
+    Native.remap(s.config.remotes);
+  }
+
+  /// [action] as the picker names it: an app by its name; null is Default.
+  String _actionLabel(String? action) {
+    if (action == null) return 'Default';
+    if (action == 'nothing') return 'Nothing';
+    if (action.startsWith('app:')) {
+      final package = action.substring(4);
+      return s.apps.all.where((app) => app.package == package).firstOrNull?.label ?? package;
+    }
+    for (final (_, actions) in actionGroups) {
+      for (final (value, label) in actions) {
+        if (value == action) return label;
+      }
+    }
+    return action;
+  }
+
+  static String _slotLabel(String slot) => slots.firstWhere((s) => s.$1 == slot).$2;
+
+  /// Waits for a press of any button, then opens that button's page. A button
+  /// GTVL didn't list stays listed under its remote from then on.
+  void _findButton() {
+    var gaveUp = false;
+    final page = _Page(
+      'Find a button',
+      () => [
+        _Note(
+          gaveUp ? 'No button came. Go back and try again.' : 'Press the button on your remote. Back stops looking.',
+        ),
+      ],
+      onClose: Native.stopFinding,
+    );
+    _push(page);
+    Native.findButton().then((found) {
+      if (!mounted || _pages.lastOrNull != page) return;
+      if (found == null) {
+        setState(() => gaveUp = true);
+        return;
+      }
+      Remaps(s.config.remotes).keep(found.remote, found.name, found.key);
+      _remapsChanged();
+      _refreshButtons();
+      // The button's own page takes this one's place.
+      setState(_pages.removeLast);
+      final label = buttonInfo(found.remote, found.key).label;
+      _push(_Page(label, () => _slotRows(found.remote, found.name, found.key)), from: 'Find a button');
+    });
+  }
+
   List<Widget> _aboutRows() => const [
-    _Row('Version', value: '0.2.0'),
+    _Row('Version', value: '0.2.1 alpha'),
     _Note('GTVL: a clean, light home screen for Android TV.'),
     _Note('Aerial films by Apple. The list of films comes from the Overflight project (Apache-2.0).'),
     _Note('Text set in Inter, under the SIL Open Font License.'),
@@ -958,6 +1417,7 @@ class _Row extends StatelessWidget {
     this.checked = false,
     this.chevron = false,
     this.active = false,
+    this.enabled = true,
     this.onPressed,
     this.onLongPress,
     this.onKey,
@@ -973,6 +1433,9 @@ class _Row extends StatelessWidget {
   /// Opens a deeper level; Right does too.
   final bool chevron;
   final bool active;
+
+  /// False greys the row out: it can still be focused, to read why, but does nothing.
+  final bool enabled;
   final VoidCallback? onPressed;
   final VoidCallback? onLongPress;
   final KeyEventResult Function(KeyEvent event)? onKey;
@@ -982,12 +1445,12 @@ class _Row extends StatelessWidget {
     final column = _Column.of(context);
     if (column?.folded ?? false) return _folded(column!.opened == label);
     return Pressable(
-      onPressed: onPressed,
-      onLongPress: onLongPress,
+      onPressed: enabled ? onPressed : null,
+      onLongPress: enabled ? onLongPress : null,
       onKey: (event) {
         final custom = onKey?.call(event) ?? KeyEventResult.ignored;
         if (custom != KeyEventResult.ignored) return custom;
-        if (chevron && event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowRight) {
+        if (enabled && chevron && event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowRight) {
           onPressed?.call();
           return KeyEventResult.handled;
         }
@@ -1014,7 +1477,12 @@ class _Row extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(label, style: Look.body.copyWith(color: focused ? Look.white : const Color(0xE6FFFFFF))),
+                    Text(
+                      label,
+                      style: Look.body.copyWith(
+                        color: !enabled ? _quiet : (focused ? Look.white : const Color(0xE6FFFFFF)),
+                      ),
+                    ),
                     if (note != null) Text(note!, style: Look.small.copyWith(color: _quiet)),
                   ],
                 ),
@@ -1111,3 +1579,146 @@ class _Note extends StatelessWidget {
           child: Text(text, style: Look.small.copyWith(color: _quiet)),
         );
 }
+
+/// [thumbs] two to a row, each row its own item in the list, so previews
+/// load as they scroll into view.
+List<Widget> _grid(List<Widget> thumbs) => [
+  for (var i = 0; i < thumbs.length; i += 2) _ThumbRow(thumbs[i], i + 1 < thumbs.length ? thumbs[i + 1] : null),
+];
+
+/// Two previews side by side. Hidden in folded columns.
+class _ThumbRow extends StatelessWidget {
+  const _ThumbRow(this.left, this.right);
+
+  final Widget left;
+  final Widget? right;
+
+  @override
+  Widget build(BuildContext context) => (_Column.of(context)?.folded ?? false)
+      ? const SizedBox.shrink()
+      : Padding(
+          padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: left),
+              const SizedBox(width: 14),
+              Expanded(child: right ?? const SizedBox.shrink()),
+            ],
+          ),
+        );
+}
+
+/// A picture or video to pick: a 16:9 preview with its name below, and a
+/// check while picked. Focus lifts it a little and rings it in white.
+class _Thumb extends StatelessWidget {
+  const _Thumb(
+    this.label, {
+    super.key,
+    this.picture,
+    this.folder = false,
+    this.checked = false,
+    this.status,
+    this.progress,
+    this.onPressed,
+  });
+
+  final String label;
+
+  /// The preview, filling the frame; empty while it loads.
+  final Widget? picture;
+
+  /// Stands for everything in a folder.
+  final bool folder;
+  final bool checked;
+
+  /// Said over the preview, e.g. "Downloading", with [progress] (0 to 1) as
+  /// a line along its foot.
+  final String? status;
+  final double? progress;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => Pressable(
+    onPressed: onPressed,
+    builder: (context, focused) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AnimatedScale(
+          scale: focused ? 1.04 : 1,
+          duration: Look.fast,
+          curve: Look.ease,
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: AnimatedContainer(
+              duration: Look.fast,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(color: const Color(0x14FFFFFF), borderRadius: BorderRadius.circular(10)),
+              foregroundDecoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: focused ? Look.white : Look.hairline, width: focused ? 2 : 1),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ?picture,
+                  if (folder) const Positioned(left: 8, bottom: 8, child: _Badge(Icons.folder_outlined)),
+                  if (status != null)
+                    ColoredBox(
+                      color: const Color(0x99000000),
+                      child: Center(
+                        child: Text(status!, style: Look.small.copyWith(color: Look.white)),
+                      ),
+                    ),
+                  if (progress != null)
+                    Align(
+                      alignment: Alignment.bottomLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: progress!.clamp(0.0, 1.0),
+                        child: const SizedBox(height: 3, child: ColoredBox(color: Look.white)),
+                      ),
+                    ),
+                  if (checked) const Positioned(top: 8, right: 8, child: _Badge(Icons.check_rounded, filled: true)),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 7),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Look.small.copyWith(color: focused ? Look.white : _soft),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// A small round mark on a preview: white with a dark icon when [filled].
+class _Badge extends StatelessWidget {
+  const _Badge(this.icon, {this.filled = false});
+
+  final IconData icon;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 22,
+    height: 22,
+    decoration: BoxDecoration(shape: BoxShape.circle, color: filled ? Look.white : const Color(0x99000000)),
+    child: Icon(icon, size: 14, color: filled ? const Color(0xFF1C1C1E) : Look.white),
+  );
+}
+
+/// Fades an image in once it has decoded, unless it was there at once.
+Widget _fadeIn(BuildContext context, Widget child, int? frame, bool wasSynchronouslyLoaded) => wasSynchronouslyLoaded
+    ? child
+    : AnimatedOpacity(opacity: frame == null ? 0 : 1, duration: Look.medium, child: child);
+
+/// Nothing, where an image could not load.
+Widget _blank(BuildContext context, Object error, StackTrace? stackTrace) => const SizedBox.shrink();

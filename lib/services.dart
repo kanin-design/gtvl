@@ -22,9 +22,12 @@ class Services {
   final caption = ValueNotifier<String?>(null);
 
   static Future<Services> start() async {
+    // Asked first: listing the TV's decoders takes a moment.
+    final hdr = Native.hdr();
     final paths = await Native.paths();
     final config = await Config.load(paths.files);
-    final aerials = Aerials('${paths.cache}/aerial');
+    Native.remap(config.remotes);
+    final aerials = Aerials('${paths.cache}/aerial', hdr: await hdr);
     await aerials.load();
     final apps = AppsModel(config)..load();
     return Services._(paths.files, config, apps, StatusModel(config), aerials);

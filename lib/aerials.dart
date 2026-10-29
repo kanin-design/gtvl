@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 
 /// One video for the wallpaper player.
 class Scene {
-  const Scene(this.uri, this.caption, {this.kind = '', this.file = false, this.loop = false});
+  const Scene(this.uri, this.caption, {this.kind = '', this.file = false, this.loop = false, this.hdr = false});
 
   final String uri;
 
@@ -22,13 +22,20 @@ class Scene {
 
   /// Play this scene forever instead of moving on.
   final bool loop;
+
+  /// Dolby Vision, which shows only on the TV's own video surface.
+  final bool hdr;
 }
 
 /// Apple TV aerial films: a bundled list played in shuffled order, none
 /// repeating before all have played, with one film kept on disk so the
 /// wallpaper starts instantly.
 class Aerials {
-  Aerials(this._dir);
+  Aerials(this._dir, {this.hdr = const {}});
+
+  /// The HDR qualities this TV can show, asked of it at start; any other HDR
+  /// choice plays its SDR twin.
+  final Set<String> hdr;
 
   final String _dir;
   final _random = Random();
@@ -36,8 +43,6 @@ class Aerials {
   List<Map<String, Object?>> _all = const [];
   HttpClient? _http;
   bool _saving = false;
-
-  static const qualities = ['1080p', '1080p_hdr', '4k', '4k_hdr'];
 
   /// Scene kinds the user can turn off: from the space station, under the
   /// sea, over cities, and over landscapes.
@@ -66,6 +71,7 @@ class Aerials {
   /// [useSaved]), then a shuffled one that is never the same twice in a row.
   /// Kinds in [off] are skipped, unless that would leave nothing.
   Scene? next(Scene? previous, String quality, {Set<String> off = const {}, bool useSaved = true}) {
+    quality = _playable(quality);
     if (previous == null && useSaved) {
       final saved = _saved(quality, off);
       if (saved != null) return saved;
@@ -84,8 +90,12 @@ class Aerials {
     }
     final video = _bag.removeLast();
     final url = (video['url_$quality'] ?? video['url_1080p']) as String?;
-    return url == null ? null : Scene(url, _caption(video), kind: _kind(video));
+    return url == null ? null : Scene(url, _caption(video), kind: _kind(video), hdr: quality.endsWith('_hdr'));
   }
+
+  /// [quality], or its SDR twin when this TV can't show it.
+  String _playable(String quality) =>
+      quality.endsWith('_hdr') && !hdr.contains(quality) ? quality.replaceFirst('_hdr', '') : quality;
 
   static String _caption(Map<String, Object?> video) =>
       [video['location'], video['title']].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
@@ -102,7 +112,13 @@ class Aerials {
       final meta = jsonDecode(_meta.readAsStringSync()) as Map<String, Object?>;
       final kind = meta['kind'] as String? ?? '';
       if (meta['quality'] != quality || off.contains(kind) || !_video.existsSync()) return null;
-      return Scene(_video.path, meta['caption'] as String? ?? '', kind: kind, file: true);
+      return Scene(
+        _video.path,
+        meta['caption'] as String? ?? '',
+        kind: kind,
+        file: true,
+        hdr: quality.endsWith('_hdr'),
+      );
     } on Object {
       return null; // nothing saved yet
     }
@@ -118,6 +134,7 @@ class Aerials {
   /// Saves [scene] to disk for the next start, unless the saved film is recent.
   Future<void> remember(Scene scene, String quality) async {
     if (_saving || scene.file) return;
+    quality = _playable(quality);
     if (_saved(quality, const {}) != null && DateTime.now().difference(_meta.lastModifiedSync()) < _refreshAfter) {
       return;
     }

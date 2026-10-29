@@ -65,18 +65,30 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   /// The dock app being moved, if any.
   String? _moving;
-  StreamSubscription<Object?>? _homeKey;
+  StreamSubscription<Object?>? _homeKey, _opens;
 
   @override
   void initState() {
     super.initState();
     // Home pressed while already home: close menus, back to the dock.
     _homeKey = Native.events.where((event) => event['type'] == 'home').listen((_) => _goHome(closeMenus: true));
+    // A remapped button asking for settings or all apps.
+    _opens = Native.events.where((event) => event['type'] == 'open').listen((event) {
+      if (!mounted) return;
+      _goHome(closeMenus: true);
+      switch (event['what']) {
+        case 'settings':
+          showSettings(context);
+        case 'apps':
+          _enter(_grid);
+      }
+    });
   }
 
   @override
   void dispose() {
     _homeKey?.cancel();
+    _opens?.cancel();
     _conceal?.cancel();
     _eased.dispose();
     _page.dispose();

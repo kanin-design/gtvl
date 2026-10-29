@@ -18,9 +18,12 @@ class Config extends ChangeNotifier {
       wallpaper = v.get('wallpaper'),
       aerialQuality = v.get('aerialQuality'),
       gradient = v.get('gradient'),
-      videoPath = v.get('videoPath'),
-      imagePath = v.get('imagePath'),
+      pictures = v.stringsOr('pictures', 'imagePath'),
       pictureMinutes = v.get('pictureMinutes'),
+      pictureShuffle = v.get('pictureShuffle'),
+      videos = v.stringsOr('videos', 'videoPath'),
+      videoShuffle = v.get('videoShuffle'),
+      videoLoopMinutes = v.get('videoLoopMinutes'),
       topIcons = _iconOrder(v.strings('topIcons')),
       topHidden = {...v.strings('topHidden')},
       vpnApp = v.get('vpnApp'),
@@ -38,7 +41,8 @@ class Config extends ChangeNotifier {
       lineAlpha = v.number('lineAlpha'),
       dockSize = v.get('dockSize'),
       tileShape = v.get('tileShape'),
-      dockAlign = v.get('dockAlign');
+      dockAlign = v.get('dockAlign'),
+      remotes = v.map('remotes');
 
   /// Icons the top bar can show, in their default order.
   static const topIconIds = ['settings', 'network', 'vpn'];
@@ -52,17 +56,26 @@ class Config extends ChangeNotifier {
   final List<String> dock;
   final Set<String> hidden;
 
-  /// aerials, gradient, video or image.
+  /// aerials, gradient, video or image (pictures).
   String wallpaper;
   String aerialQuality;
   int gradient;
-  String? videoPath;
 
-  /// A picture, or a folder whose pictures show in turn.
-  String? imagePath;
+  /// Pictures shown in turn: picture files, and folders standing for every
+  /// picture in them.
+  final List<String> pictures;
 
-  /// With a folder, the next picture shows after this many minutes.
+  /// With several pictures, the next shows after this many minutes.
   int pictureMinutes;
+  bool pictureShuffle;
+
+  /// Videos played in turn, chosen like [pictures]; a single one loops.
+  final List<String> videos;
+  bool videoShuffle;
+
+  /// With several videos, each loops this many minutes before the next; 0
+  /// plays each once.
+  int videoLoopMinutes;
 
   final List<String> topIcons;
   final Set<String> topHidden;
@@ -103,6 +116,9 @@ class Config extends ChangeNotifier {
   /// (equal gaps, ends too) or between (first and last at the edges).
   String dockAlign;
 
+  /// What the remote's buttons do instead, by remote (see Remaps).
+  final Map<String, Object?> remotes;
+
   Timer? _save;
 
   static Future<Config> load(String dir) async {
@@ -127,9 +143,12 @@ class Config extends ChangeNotifier {
     'wallpaper': wallpaper,
     'aerialQuality': aerialQuality,
     'gradient': gradient,
-    'videoPath': videoPath,
-    'imagePath': imagePath,
+    'pictures': pictures,
     'pictureMinutes': pictureMinutes,
+    'pictureShuffle': pictureShuffle,
+    'videos': videos,
+    'videoShuffle': videoShuffle,
+    'videoLoopMinutes': videoLoopMinutes,
     'topIcons': topIcons,
     'topHidden': topHidden.toList(),
     'vpnApp': vpnApp,
@@ -148,6 +167,7 @@ class Config extends ChangeNotifier {
     'dockSize': dockSize,
     'tileShape': tileShape,
     'dockAlign': dockAlign,
+    'remotes': remotes,
   };
 
   /// Call after changing any field: tells listeners and saves soon.
@@ -201,4 +221,16 @@ class _Values {
     for (final value in saved[key] is List ? saved[key]! as List : defaults[key] as List? ?? const [])
       if (value is String) value,
   ];
+
+  /// A JSON object, as saved, else a copy of its default.
+  Map<String, Object?> map(String key) => switch ((saved[key], defaults[key])) {
+    (final Map<String, Object?> value, _) => value,
+    (_, final Map<String, Object?> value) => {...value},
+    _ => throw StateError('defaults.json has no $key'),
+  };
+
+  /// [strings], from a file saved before the list replaced the single path
+  /// under [old].
+  List<String> stringsOr(String key, String old) =>
+      saved[key] is! List && saved[old] is String ? [saved[old]! as String] : strings(key);
 }

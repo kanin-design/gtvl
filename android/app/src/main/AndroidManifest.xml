@@ -3,9 +3,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
-    <!-- Pictures from storage as the wallpaper; Android 13 renamed the permission. -->
+    <!-- Pictures and videos from storage as the wallpaper; Android 13 split the permission. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -54,6 +55,19 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Remaps the remote's buttons, once turned on in Android's accessibility settings. -->
+        <service
+            android:name=".ButtonService"
+            android:exported="true"
+            android:label="@string/buttons_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/buttons" />
+        </service>
         <meta-data android:name="flutterEmbedding" android:value="2" />
         <!-- Skia: Impeller (Vulkan) shows video in red and black on the Shield. -->
         <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false" />

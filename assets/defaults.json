@@ -5,9 +5,12 @@
   "wallpaper": "aerials",
   "aerialQuality": "1080p",
   "gradient": 2,
-  "videoPath": null,
-  "imagePath": null,
+  "pictures": [],
   "pictureMinutes": 5,
+  "pictureShuffle": true,
+  "videos": [],
+  "videoShuffle": false,
+  "videoLoopMinutes": 5,
   "topIcons": [
     "settings",
     "network",
@@ -33,5 +36,6 @@
   "lineAlpha": 0.12,
   "dockSize": "small",
   "tileShape": "square",
-  "dockAlign": "start"
+  "dockAlign": "start",
+  "remotes": {}
 }
