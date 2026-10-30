@@ -14,7 +14,8 @@ files are smaller builds for 64-bit and 32-bit Android.
   video loops seamlessly, for a set time when there are several); or a
   gradient. HDR films play on the TV's own video layer, in Dolby Vision where
   the TV shows it.
-- **Dock:** a full-width glass bar of favourite apps; Down shows all other apps.
+- **Dock:** a full-width glass bar of favourite apps, lit from within behind
+  the app in focus; Down shows all other apps.
   Apps show as wide TV banners or square icons, in five sizes, with
   adjustable spacing, corners and height, and the glass (blur, tint, edge
   lines) is adjustable.

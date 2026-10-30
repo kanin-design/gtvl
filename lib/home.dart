@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -71,7 +74,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final Services s = Services.of(context);
 
   /// 0: home, with the dock near the bottom. 1: all apps, the dock at the top.
@@ -87,6 +90,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   /// The dock app being moved, if any.
   String? _moving;
+
+  /// The glow in the dock's glass, and the dock app it is under, by package.
+  late final _molten = _Molten(this);
+  String? _glowing;
   StreamSubscription<Object?>? _homeKey, _opens;
 
   @override
@@ -118,6 +125,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _gridScroll.dispose();
     _bar.dispose();
     _barShown.dispose();
+    _molten.dispose();
     super.dispose();
   }
 
@@ -409,31 +417,37 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget _dockBar(_Geometry g) {
     final apps = s.apps.dock;
     final c = s.config;
-    final line = BorderSide(
-      color: Look.white.withValues(alpha: c.lineAlpha),
-      width: c.lineWidth,
-    );
+    // The app the glow is under may have moved along, or another app gone.
+    final glowing = apps.indexWhere((app) => app.package == _glowing);
+    if (glowing >= 0) _molten.focus(glowing);
+    final names = c.dockNames ? _Geometry.labelHeight : 0.0;
+    final (first, step) = _centres(g, apps.length, c.dockAlign);
     return FocusScope(
       node: _dock,
       onKeyEvent: _onDockKey,
       onFocusChange: (focused) {
-        if (focused) _page.reverse();
+        if (focused) {
+          _page.reverse();
+        } else {
+          _glowing = null;
+          _molten.focus(null);
+        }
       },
       child: Glass(
         sigma: c.glassBlur,
         tint: Color(c.glassTint).withValues(alpha: c.glassTintAlpha),
-        border: c.lineWidth > 0 ? Border.symmetric(horizontal: line) : null,
-        child: apps.isEmpty
-            ? Center(
-                child: Text(
-                  s.apps.loaded ? 'Hold OK on an app and choose Favourite to add it here' : '',
-                  style: Look.value,
-                ),
-              )
-            : FocusTraversalGroup(
-                policy: smoothTraversal,
-                child: Align(
-                  alignment: Alignment.centerLeft,
+        vibrancy: 1.35,
+        child: CustomPaint(
+          painter: _BandLight(line: c.lineWidth, alpha: c.lineAlpha),
+          child: apps.isEmpty
+              ? Center(
+                  child: Text(
+                    s.apps.loaded ? 'Hold OK on an app and choose Favourite to add it here' : '',
+                    style: Look.value,
+                  ),
+                )
+              : FocusTraversalGroup(
+                  policy: smoothTraversal,
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
@@ -441,37 +455,71 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     // At least the screen's width, so apps that fit can spread across it.
                     child: ConstrainedBox(
                       constraints: BoxConstraints(minWidth: g.width - 2 * g.pad + g.gap),
-                      child: Row(
-                        mainAxisAlignment: _arrangements[c.dockAlign] ?? MainAxisAlignment.start,
-                        children: [
-                          for (var i = 0; i < apps.length; i++)
-                            Padding(
-                              key: ValueKey(apps[i].package),
-                              padding: EdgeInsets.symmetric(horizontal: g.gap / 2),
-                              child: SizedBox(
-                                width: g.tileWidth,
-                                height: g.tileHeight + (c.dockNames ? _Geometry.labelHeight : 0),
-                                child: AppTile(
-                                  app: apps[i],
-                                  square: g.square,
-                                  radius: g.radius,
-                                  label: c.dockNames,
-                                  autofocus: i == 0 && _onTop,
-                                  moving: _moving == apps[i].package,
-                                  onKey: _moving == apps[i].package ? _onMoveKey : null,
-                                  onLaunch: () => _launch(apps[i]),
-                                  onMenu: () => _menu(apps[i]),
+                      // The glow, behind the apps and moving along with them.
+                      child: CustomPaint(
+                        painter: _MoltenPainter(
+                          _molten,
+                          first: first,
+                          step: step,
+                          tile: Size(g.tileWidth, g.tileHeight),
+                          radius: g.radius,
+                          raise: names / 2,
+                          ratio: MediaQuery.devicePixelRatioOf(context),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: _arrangements[c.dockAlign] ?? MainAxisAlignment.start,
+                          children: [
+                            for (var i = 0; i < apps.length; i++)
+                              Padding(
+                                key: ValueKey(apps[i].package),
+                                padding: EdgeInsets.symmetric(horizontal: g.gap / 2),
+                                child: SizedBox(
+                                  width: g.tileWidth,
+                                  height: g.tileHeight + names,
+                                  child: AppTile(
+                                    app: apps[i],
+                                    square: g.square,
+                                    radius: g.radius,
+                                    label: c.dockNames,
+                                    autofocus: i == 0 && _onTop,
+                                    moving: _moving == apps[i].package,
+                                    onKey: _moving == apps[i].package ? _onMoveKey : null,
+                                    onLaunch: () => _launch(apps[i]),
+                                    onMenu: () => _menu(apps[i]),
+                                    glow: _molten,
+                                    index: i,
+                                    onDown: _molten.press,
+                                    onFocusChange: (focused) {
+                                      if (!focused) return;
+                                      _glowing = apps[i].package;
+                                      _molten.focus(i);
+                                    },
+                                  ),
                                 ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
+        ),
       ),
     );
+  }
+
+  /// Where the dock's apps sit, as the centre of the first and the distance
+  /// from one centre to the next, along the row of [count] apps as its
+  /// "arrange" setting spreads them.
+  (double, double) _centres(_Geometry g, int count, String arrange) {
+    final cell = g.tileWidth + g.gap;
+    final free = count == 0 ? 0.0 : math.max(0.0, g.width - 2 * g.pad + g.gap - count * cell);
+    return switch (arrange) {
+      'center' => (free / 2 + cell / 2, cell),
+      'evenly' => (free / (count + 1) + cell / 2, cell + free / (count + 1)),
+      'between' when count > 1 => (cell / 2, cell + free / (count - 1)),
+      _ => (cell / 2, cell),
+    };
   }
 
   /// How the dock spreads apps that fit, by its "arrange" setting.
@@ -764,4 +812,362 @@ class _ClockState extends State<Clock> {
       style: Look.clock,
     );
   }
+}
+
+/// Light on the dock's glass, from above: an edge along its top, brightest a
+/// third of the way across and fading toward the sides; a soft glow inside,
+/// just under it; and a fainter edge along its bottom. [line] is the edges'
+/// thickness (0 for none) and [alpha] their usual strength.
+class _BandLight extends CustomPainter {
+  _BandLight({required this.line, required this.alpha});
+
+  final double line, alpha;
+
+  static Color _white(double alpha) => Color.fromRGBO(255, 255, 255, alpha.clamp(0.0, 1.0));
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final glow = Rect.fromLTWH(0, 0, size.width, size.height * 0.45);
+    canvas.drawRect(
+      glow,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [_white(0.07), _white(0)],
+        ).createShader(glow),
+    );
+    if (line <= 0) return;
+    final top = Rect.fromLTWH(0, 0, size.width, line);
+    canvas.drawRect(
+      top,
+      Paint()
+        ..shader = LinearGradient(
+          colors: [_white(alpha * 0.8), _white(alpha * 2.6), _white(alpha * 1.6), _white(alpha * 0.8)],
+          stops: const [0, 0.32, 0.68, 1],
+        ).createShader(top),
+    );
+    canvas.drawRect(Rect.fromLTWH(0, size.height - line, size.width, line), Paint()..color = _white(alpha * 0.6));
+  }
+
+  @override
+  bool shouldRepaint(_BandLight old) => old.line != line || old.alpha != alpha;
+}
+
+/// The dock's light: a hot glow in the glass behind the app in focus. It
+/// flows after focus to the next app, leaves an ember where it was that cools
+/// to red as it fades, and cools away when focus leaves the dock. It ticks
+/// only while something changes.
+class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
+  _Molten(TickerProvider vsync) {
+    _ticker = vsync.createTicker(_tick);
+  }
+
+  late final Ticker _ticker;
+  Duration? _last;
+  double _at = 0, _to = 0, _heat = 0, _hot = 0;
+
+  /// How fast the glow flows, in apps a second.
+  double speed = 0;
+
+  /// Embers left where the glow was, as (place, heat).
+  final embers = <(double, double)>[];
+
+  @override
+  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat);
+
+  /// OK is down on the app in focus: the glow flares while it is.
+  void press(bool down) {
+    if (_hot == 0) return;
+    _hot = down ? 1.35 : 1;
+    _start();
+  }
+
+  /// Focus is on the dock app at [index], or has left the dock (null).
+  void focus(int? index) {
+    final hot = index == null ? 0.0 : 1.0;
+    final to = index?.toDouble() ?? _to;
+    if (to == _to && hot == _hot) return;
+    if (index != null) {
+      if (_heat < 0.05) {
+        // Cold: it lights up where focus is, rather than flowing there.
+        _at = to;
+      } else if ((to - _to).abs() > 0.5) {
+        embers.add((_at, _heat * 0.85));
+        if (embers.length > 3) embers.removeAt(0);
+      }
+      _to = to;
+    }
+    _hot = hot;
+    _start();
+  }
+
+  void _start() {
+    if (_ticker.isActive) return;
+    _last = null;
+    _ticker.start();
+  }
+
+  void _tick(Duration now) {
+    final dt = _last == null ? 1 / 60 : (now - _last!).inMicroseconds / 1e6;
+    _last = now;
+    final was = _at;
+    _at += (_to - _at) * (1 - math.exp(-dt * 16));
+    speed = dt > 0 ? (_at - was) / dt : 0;
+    // Heats quickly, cools slowly.
+    _heat += (_hot - _heat) * (1 - math.exp(-dt * (_hot > _heat ? 12 : 3.5)));
+    for (var i = embers.length - 1; i >= 0; i--) {
+      final (at, heat) = embers[i];
+      final cooler = heat * math.exp(-dt * 4.5);
+      if (cooler < 0.02) {
+        embers.removeAt(i);
+      } else {
+        embers[i] = (at, cooler);
+      }
+    }
+    if ((_to - _at).abs() < 0.001 && (_hot - _heat).abs() < 0.002 && embers.isEmpty) {
+      _at = _to;
+      _heat = _hot;
+      speed = 0;
+      _ticker.stop();
+    }
+    notifyListeners();
+  }
+
+  /// The halo round the lifted app, blurred once for its size (see [_Halo]).
+  _Halo? _halo;
+
+  _Halo halo(Size tile, double radius, double ratio) {
+    if (_halo case final halo? when halo.tile == tile && halo.radius == radius && halo.ratio == ratio) return halo;
+    _halo?.dispose();
+    return _halo = _Halo(tile, radius, ratio);
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    _halo?.dispose();
+    super.dispose();
+  }
+}
+
+/// The halo round a lifted app of one size: light bleeding round its edges,
+/// a wide orange glow and a tight white-hot one, blurred once into images in
+/// the colours of a full glow, which the painter fades with the heat.
+/// Blurring it afresh on every frame cost a TV's GPU more than all the rest
+/// of the dock together.
+class _Halo {
+  _Halo(this.tile, this.radius, this.ratio)
+    : layers = [
+        for (final (grow, blur, depth, opacity) in _layers)
+          _blurred(tile, radius, ratio, grow, blur, molten(1, depth: depth, opacity: opacity)),
+      ];
+
+  /// Each layer: how far it reaches past the lifted tile, its blur, and its
+  /// colour, as [molten]'s depth and opacity.
+  static const _layers = [(12.0, 24.0, 0.45, 0.7), (3.0, 7.0, 0.08, 0.9)];
+
+  final Size tile;
+  final double radius, ratio;
+  final List<ui.Image> layers;
+
+  /// A rounded rectangle of [colour], [grow] larger than the lifted tile,
+  /// blurred by [blur], centred in an image with room for the blur, at the
+  /// screen's [ratio] of pixels.
+  static ui.Image _blurred(Size tile, double radius, double ratio, double grow, double blur, Color colour) {
+    final lifted = Size(tile.width * 1.12, tile.height * 1.12);
+    final margin = grow + blur * 3;
+    final size = Size(lifted.width + 2 * margin, lifted.height + 2 * margin);
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder)
+      ..scale(ratio)
+      ..drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: size.center(Offset.zero),
+            width: lifted.width + 2 * grow,
+            height: lifted.height + 2 * grow,
+          ),
+          Radius.circular(radius * 1.12 + grow),
+        ),
+        Paint()
+          ..color = colour
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur),
+      );
+    final picture = recorder.endRecording();
+    final image = picture.toImageSync((size.width * ratio).ceil(), (size.height * ratio).ceil());
+    picture.dispose();
+    return image;
+  }
+
+  void dispose() {
+    for (final image in layers) {
+      image.dispose();
+    }
+  }
+}
+
+/// Paints the dock's glow in the row of apps' own space, so it scrolls with
+/// them. The glass lights up as if a lamp burned inside it, behind the app in
+/// focus: the frosted glass glows around it, a fine filament of light runs
+/// along the line and shows between the apps, light bleeds round the app's
+/// edges, and the glass's top and bottom edges carry the light furthest.
+/// Embers glow less, and without a filament.
+class _MoltenPainter extends CustomPainter {
+  _MoltenPainter(
+    this.light, {
+    required this.first,
+    required this.step,
+    required this.tile,
+    required this.radius,
+    required this.raise,
+    required this.ratio,
+  }) : super(repaint: light);
+
+  final _Molten light;
+
+  /// The first app's centre, and the distance from one app's to the next.
+  final double first, step;
+  final Size tile;
+  final double radius;
+
+  /// How far above the middle the tiles sit, making room for names.
+  final double raise;
+
+  /// The screen's pixels to a logical one, for the halo's images.
+  final double ratio;
+
+  static const _none = Color(0x00000000);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final (at, heat) in light.embers) {
+      _spot(canvas, size, first + at * step, heat, 1, ember: true);
+    }
+    if (light.value case final glow?) {
+      final stretch = 1 + 0.35 * (light.speed.abs() / 10).clamp(0.0, 1.0);
+      _spot(canvas, size, first + glow.at * step, glow.heat, stretch);
+    }
+  }
+
+  /// The light at [x]: an [ember] is only the glass still warm, with no
+  /// filament and no halo round the app.
+  void _spot(Canvas canvas, Size size, double x, double heat, double stretch, {bool ember = false}) {
+    final centre = Offset(x, size.height / 2 - raise);
+    final glass = size.height;
+    // The frosted glass lit from within: brightest round the app, and
+    // carried a long way along the line.
+    _pool(
+      canvas,
+      centre,
+      tile.width * 4.2 * stretch,
+      glass,
+      [
+        molten(heat, depth: 0.3, opacity: 0.55 * heat),
+        molten(heat, depth: 0.6, opacity: 0.3 * heat),
+        molten(heat, depth: 0.9, opacity: 0.09 * heat),
+        _none,
+      ],
+      const [0, 0.22, 0.55, 1],
+    );
+    if (!ember) {
+      // Light bleeding round the app's edges: a wide orange glow, then a
+      // tight one, white-hot, just past the lifted tile, drawn out a little
+      // the way it flows. Each is one image, faded with the heat.
+      final faded = Paint()
+        ..color = Color.fromRGBO(0, 0, 0, heat.clamp(0.0, 1.0))
+        ..blendMode = BlendMode.plus
+        ..filterQuality = FilterQuality.low;
+      for (final image in light.halo(tile, radius, ratio).layers) {
+        canvas.drawImageRect(
+          image,
+          Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+          Rect.fromCenter(
+            center: centre,
+            width: image.width / ratio + tile.width * 1.12 * (stretch - 1),
+            height: image.height / ratio,
+          ),
+          faded,
+        );
+      }
+    }
+    if (!ember) {
+      // A fine filament of light through the glass, level with the apps'
+      // middles: it shows in the gaps between them, fading along the line.
+      for (final (high, depth, opacity) in [(7.0, 0.5, 0.4), (1.6, 0.05, 0.8)]) {
+        _pool(
+          canvas,
+          centre,
+          tile.width * 4.5 * stretch,
+          high,
+          [
+            molten(heat, depth: depth, opacity: opacity * heat),
+            molten(heat, depth: depth + 0.4, opacity: 0.3 * opacity * heat),
+            _none,
+          ],
+          const [0, 0.35, 1],
+        );
+      }
+    }
+    // The glass's edges carry the light furthest, the top more than the
+    // bottom: hottest right over the app, then a long tail along the line.
+    for (final (y, strength) in [(1.0, 1.0), (glass - 1, 0.75)]) {
+      final line = Rect.fromCenter(center: Offset(x, y), width: tile.width * 10, height: 2);
+      final tail = molten(heat, depth: 0.75, opacity: 0.3 * heat * strength);
+      canvas.drawRect(
+        line,
+        Paint()
+          ..blendMode = BlendMode.plus
+          ..shader = LinearGradient(
+            colors: [
+              _none,
+              tail,
+              molten(heat, depth: 0.12, opacity: heat * strength),
+              tail,
+              _none,
+            ],
+            stops: const [0, 0.36, 0.5, 0.64, 1],
+          ).createShader(line),
+      );
+    }
+  }
+
+  /// A soft oval of light, [across] wide and [high] tall from its centre,
+  /// [colours] running from the centre outward, added to the glass. Only
+  /// gradients and the rounded rectangles' own fast blur draw the glow, as a
+  /// TV under a moving wallpaper redraws it every frame.
+  static void _pool(
+    Canvas canvas,
+    Offset centre,
+    double across,
+    double high,
+    List<Color> colours, [
+    List<double>? stops,
+  ]) {
+    canvas
+      ..save()
+      ..translate(centre.dx, centre.dy)
+      ..scale(across / high, 1)
+      ..drawCircle(
+        Offset.zero,
+        high,
+        Paint()
+          ..blendMode = BlendMode.plus
+          ..shader = RadialGradient(
+            colors: colours,
+            stops: stops,
+          ).createShader(Rect.fromCircle(center: Offset.zero, radius: high)),
+      )
+      ..restore();
+  }
+
+  @override
+  bool shouldRepaint(_MoltenPainter old) =>
+      old.light != light ||
+      old.first != first ||
+      old.step != step ||
+      old.tile != tile ||
+      old.radius != radius ||
+      old.raise != raise ||
+      old.ratio != ratio;
 }

@@ -138,11 +138,25 @@ internal fun Context.openLink(address: String, pkg: String?): Boolean {
  */
 internal fun Context.picture(address: String): String? {
     val file = File(File(cacheDir, "pictures").apply { mkdirs() }, "${address.hashCode().toUInt()}.jpg")
-    if (file.exists()) return file.path
+    if (file.length() > 0) return file.path
     return runCatching {
         val bitmap = contentResolver.openInputStream(Uri.parse(address))?.use(BitmapFactory::decodeStream) ?: return null
         val small = Bitmap.createScaledBitmap(bitmap, 480, 480 * bitmap.height / bitmap.width, true)
-        file.outputStream().use { small.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+        small.saveTo(file, Bitmap.CompressFormat.JPEG, 85)
         file.path
     }.getOrNull()
+}
+
+/**
+ * Writes the picture to [file] whole or not at all: into a ".part" file,
+ * onto the disk, then renamed into place, so power lost mid-write never
+ * leaves an empty or broken picture for a cache to keep handing out.
+ */
+internal fun Bitmap.saveTo(file: File, format: Bitmap.CompressFormat, quality: Int) {
+    val part = File(file.path + ".part")
+    part.outputStream().use {
+        compress(format, quality, it)
+        it.fd.sync()
+    }
+    if (!part.renameTo(file)) part.delete()
 }

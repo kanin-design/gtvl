@@ -346,7 +346,7 @@ class MainActivity : FlutterActivity() {
         val dir = File(cacheDir, "tiles").apply { mkdirs() }
         val stem = "${pkg}_${updated(pkg)}_$launcherUpdated"
         val kinds = if (square) listOf("s") else listOf("b", "i")
-        for (kind in kinds) File(dir, "$stem.$kind.png").takeIf { it.exists() }?.let { return it.path }
+        for (kind in kinds) File(dir, "$stem.$kind.png").takeIf { it.length() > 0 }?.let { return it.path }
         // Tiles of older versions. The digits keep those of an app named like "${pkg}_tv".
         dir.listFiles { f ->
             f.name.startsWith("${pkg}_") && !f.name.startsWith("$stem.") &&
@@ -360,7 +360,7 @@ class MainActivity : FlutterActivity() {
             if (square) squareIcon(sharpIcon(entry), 256) to "s" else render(entry.loadIcon(packageManager), 192, 192) to "i"
         }
         val file = File(dir, "$stem.$kind.png")
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.saveTo(file, Bitmap.CompressFormat.PNG, 100)
         bitmap.recycle()
         return file.path
     }
@@ -466,7 +466,7 @@ class MainActivity : FlutterActivity() {
         val video = File(path)
         if (!video.canRead()) return null
         val file = File(File(cacheDir, "frames").apply { mkdirs() }, "${path.hashCode().toUInt()}_${video.lastModified()}.jpg")
-        if (file.exists()) return file.path
+        if (file.length() > 0) return file.path
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(path)
@@ -478,7 +478,7 @@ class MainActivity : FlutterActivity() {
                 retriever.getFrameAtTime(at, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                     ?.let { Bitmap.createScaledBitmap(it, 480, 480 * it.height / it.width, true) }
             } ?: return null
-            file.outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            frame.saveTo(file, Bitmap.CompressFormat.JPEG, 85)
             frame.recycle()
             file.path
         } catch (e: Exception) {

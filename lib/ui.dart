@@ -70,6 +70,7 @@ class Pressable extends StatefulWidget {
     this.autofocus = false,
     this.focusNode,
     this.dip = false,
+    this.onDown,
   });
 
   final Widget Function(BuildContext context, bool focused) builder;
@@ -84,6 +85,9 @@ class Pressable extends StatefulWidget {
 
   /// Sinks a little while OK is down, so a press shows at once.
   final bool dip;
+
+  /// OK went down (true) or came up (false) on it.
+  final ValueChanged<bool>? onDown;
 
   @override
   State<Pressable> createState() => _PressableState();
@@ -139,7 +143,13 @@ class _PressableState extends State<Pressable> {
   }
 
   void _sink(bool down) {
-    if (widget.dip && _down != down && mounted) setState(() => _down = down);
+    if (_down == down || !mounted) return;
+    widget.onDown?.call(down);
+    if (widget.dip) {
+      setState(() => _down = down);
+    } else {
+      _down = down;
+    }
   }
 
   @override
@@ -151,6 +161,7 @@ class _PressableState extends State<Pressable> {
       if (!focused) {
         _hold?.cancel();
         _hold = null;
+        if (_down) widget.onDown?.call(false);
         _down = false;
       }
       setState(() => _focused = focused);
@@ -211,6 +222,8 @@ void reveal(BuildContext context, {double margin = 28, double endZone = 0}) {
 /// Frosted glass: blurs what is behind it by [sigma] (0 for none) and tints it.
 /// With [rim], light catches its edge, brightest at the top left, and its
 /// tint is a touch lighter at the top: a pane rather than a flat plate.
+/// [vibrancy] above 1 deepens the colours seen through it, as real glass
+/// keeps them, instead of letting the blur grey them out.
 class Glass extends StatelessWidget {
   const Glass({
     super.key,
@@ -220,6 +233,7 @@ class Glass extends StatelessWidget {
     this.radius = BorderRadius.zero,
     this.border,
     this.rim = false,
+    this.vibrancy = 1,
   });
 
   final Widget child;
@@ -228,6 +242,19 @@ class Glass extends StatelessWidget {
   final BorderRadius radius;
   final BoxBorder? border;
   final bool rim;
+  final double vibrancy;
+
+  /// A colour matrix that scales saturation by [amount], keeping brightness.
+  static List<double> _saturation(double amount) {
+    const r = 0.2126, g = 0.7152, b = 0.0722;
+    final rest = 1 - amount;
+    return [
+      r * rest + amount, g * rest, b * rest, 0, 0, //
+      r * rest, g * rest + amount, b * rest, 0, 0,
+      r * rest, g * rest, b * rest + amount, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -253,11 +280,14 @@ class Glass extends StatelessWidget {
           );
     // The same widgets with blur off: swapping them would rebuild everything
     // inside, dock apps and their focus included.
+    final blur = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
     return ClipRRect(
       borderRadius: radius,
       child: BackdropFilter(
         enabled: sigma > 0,
-        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        filter: vibrancy == 1
+            ? blur
+            : ImageFilter.compose(outer: ColorFilter.matrix(_saturation(vibrancy)), inner: blur),
         child: body,
       ),
     );

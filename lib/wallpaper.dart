@@ -126,6 +126,7 @@ class _PictureShowState extends State<PictureShow> {
   String? _shown;
   String _choice = '';
   Timer? _next;
+  final _missing = _Missing();
 
   @override
   void initState() {
@@ -137,6 +138,7 @@ class _PictureShowState extends State<PictureShow> {
   void didUpdateWidget(PictureShow old) {
     super.didUpdateWidget(old);
     if (widget._choice != _choice) {
+      _missing.reset();
       _load();
     } else if (old.every != widget.every) {
       _start();
@@ -149,6 +151,7 @@ class _PictureShowState extends State<PictureShow> {
     final choice = _choice = widget._choice;
     final found = await Media.expand(widget.sources, MediaKind.pictures);
     if (!mounted || choice != _choice) return;
+    _missing.check(found, widget.sources, _load);
     if (widget.shuffle) found.shuffle();
     setState(() {
       _pictures = found;
@@ -169,6 +172,7 @@ class _PictureShowState extends State<PictureShow> {
   @override
   void dispose() {
     _next?.cancel();
+    _missing.reset();
     super.dispose();
   }
 
@@ -214,6 +218,7 @@ class _VideoShowState extends State<VideoShow> {
 
   /// Shuffled videos still to play this round.
   final _bag = <String>[];
+  final _missing = _Missing();
 
   @override
   void initState() {
@@ -224,7 +229,16 @@ class _VideoShowState extends State<VideoShow> {
   @override
   void didUpdateWidget(VideoShow old) {
     super.didUpdateWidget(old);
-    if (widget._choice != _choice) _load();
+    if (widget._choice != _choice) {
+      _missing.reset();
+      _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    _missing.reset();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -232,6 +246,7 @@ class _VideoShowState extends State<VideoShow> {
     final found = await Media.expand(widget.sources, MediaKind.videos);
     final hdr = (await Future.wait(found.map(Native.isHdr))).any((isHdr) => isHdr);
     if (!mounted || choice != _choice) return;
+    _missing.check(found, widget.sources, _load);
     setState(() {
       _videos = found;
       _hdr = hdr;
@@ -266,5 +281,30 @@ class _VideoShowState extends State<VideoShow> {
     return _hdr
         ? HdrScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength)
         : ScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength);
+  }
+}
+
+/// Looks again for chosen pictures or videos none of which could be found:
+/// just after the TV starts, its storage, and any USB drive, can take a few
+/// seconds to be readable, and GTVL starts before them.
+class _Missing {
+  static const _waits = [Duration(seconds: 2), Duration(seconds: 5), Duration(seconds: 15), Duration(minutes: 1)];
+  int _tries = 0;
+  Timer? _again;
+
+  /// After a look that [found] these of [sources]: look again with [load]
+  /// if none were there, and stop once any are.
+  void check(List<String> found, List<String> sources, VoidCallback load) {
+    _again?.cancel();
+    if (found.isNotEmpty || sources.isEmpty) {
+      _tries = 0;
+    } else if (_tries < _waits.length) {
+      _again = Timer(_waits[_tries++], load);
+    }
+  }
+
+  void reset() {
+    _again?.cancel();
+    _tries = 0;
   }
 }
