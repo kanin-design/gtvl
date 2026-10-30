@@ -33,6 +33,10 @@ abstract final class Media {
   /// The repository's folders, as GitHub lists them.
   static const _collection = 'https://api.github.com/repos/kanin-design/gtvl/contents';
 
+  /// How long a connection may take to open, or a transfer go without a
+  /// byte, before it counts as failed.
+  static const _timeout = Duration(seconds: 15);
+
   /// The last part of [path].
   static String name(String path) => path.substring(path.lastIndexOf('/') + 1);
 
@@ -79,13 +83,13 @@ abstract final class Media {
       if (!kind.matches(source)) ...(await list(source, kind)).files else if (await File(source).exists()) source,
   ];
 
-  /// The collection's files of [kind]; empty when it cannot be reached.
-  static Future<List<OnlineMedia>> online(MediaKind kind) async {
-    final client = HttpClient();
+  /// The collection's files of [kind]; null when it cannot be reached.
+  static Future<List<OnlineMedia>?> online(MediaKind kind) async {
+    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final response = await (await client.getUrl(Uri.parse('$_collection/${kind.folder}'))).close();
-      if (response.statusCode != 200) return const [];
-      final entries = jsonDecode(await response.transform(utf8.decoder).join());
+      final response = await (await client.getUrl(Uri.parse('$_collection/${kind.folder}'))).close().timeout(_timeout);
+      if (response.statusCode != 200) return null;
+      final entries = jsonDecode(await response.transform(utf8.decoder).join().timeout(_timeout));
       return [
         if (entries is List)
           for (final entry in entries)
@@ -97,9 +101,9 @@ abstract final class Media {
               ),
       ];
     } on Exception {
-      return const [];
+      return null;
     } finally {
-      client.close();
+      client.close(force: true);
     }
   }
 
@@ -109,25 +113,28 @@ abstract final class Media {
 
   /// Downloads the collection's file at [url] into [dir], unless it is there
   /// already, and returns its path. [onProgress] hears how much is done, 0 to 1.
+  /// Throws [DownloadStopped] once [stop] says so, and leaves nothing behind.
   static Future<String> download(
     String url,
     String dir,
     MediaKind kind, {
     void Function(double done)? onProgress,
+    bool Function()? stop,
   }) async {
     final file = File(saved(url, dir, kind));
     if (await file.exists()) return file.path;
     // Written beside it first, so a broken download never looks finished.
     final part = File('${file.path}.part');
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final response = await (await client.getUrl(Uri.parse(url))).close();
+      final response = await (await client.getUrl(Uri.parse(url))).close().timeout(_timeout);
       if (response.statusCode != 200) throw HttpException('Status ${response.statusCode}', uri: Uri.parse(url));
       await file.parent.create(recursive: true);
       final sink = part.openWrite();
       var received = 0;
       try {
-        await for (final chunk in response) {
+        await for (final chunk in response.timeout(_timeout)) {
+          if (stop?.call() ?? false) throw const DownloadStopped();
           sink.add(chunk);
           received += chunk.length;
           if (response.contentLength > 0) onProgress?.call(received / response.contentLength);
@@ -141,7 +148,7 @@ abstract final class Media {
       if (await part.exists()) await part.delete();
       rethrow;
     } finally {
-      client.close();
+      client.close(force: true);
     }
   }
 
@@ -153,4 +160,9 @@ abstract final class Media {
       // Already gone.
     }
   }
+}
+
+/// A download stopped on request, before it was done.
+class DownloadStopped implements Exception {
+  const DownloadStopped();
 }

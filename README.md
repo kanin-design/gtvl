@@ -15,7 +15,7 @@ files are smaller builds for 64-bit and 32-bit Android.
   gradient. HDR films play on the TV's own video layer, in Dolby Vision where
   the TV shows it.
 - **Dock:** a full-width glass bar of favourite apps; Down shows all other apps.
-  Apps show as wide TV banners or rounded squares, in five sizes, with
+  Apps show as wide TV banners or square icons, in five sizes, with
   adjustable spacing, corners and height, and the glass (blur, tint, edge
   lines) is adjustable.
 - **Rows of shows:** what you are watching and what is new, from Plex (signed
@@ -26,9 +26,11 @@ files are smaller builds for 64-bit and 32-bit Android.
 - **Updates:** GTVL finds new versions in this repository's latest release,
   downloads the APK for the TV and checks it (size, SHA-256, that it is GTVL,
   newer, and signed with the same key) before Android installs it. With
-  automatic updates on, it looks every few hours; from Android 12 it then
-  installs as the TV goes to standby, and on older Android it waits under
-  Settings › About, where an update can also be checked for and installed.
+  automatic updates on, it looks every few hours. From Android 12, once GTVL
+  may install apps (the first update installed from Settings › About opens
+  Android's switch for that), it then installs as the TV goes to standby; on
+  older Android it waits under Settings › About, where an update can also be
+  checked for and installed.
 - **Buttons:** the remote's buttons (Netflix, ☰, Voice, media, volume, and
   Home and Back when held) can open an app, GTVL's settings or all apps, or do
   a system, media or volume action, separately for a press, a hold and a

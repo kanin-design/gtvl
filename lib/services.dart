@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
@@ -37,6 +39,10 @@ class Services {
   /// leaves the wallpaper's place see-through.
   final hdrBeneath = ValueNotifier(false);
 
+  /// A short line about something that didn't happen ("Couldn't open
+  /// Plex"), shown above the dock for a few seconds.
+  final notice = Notice();
+
   static Future<Services> start() async {
     // Asked first: listing the TV's decoders takes a moment.
     final hdr = Native.hdr();
@@ -52,6 +58,25 @@ class Services {
   }
 
   static Services of(BuildContext context) => context.getInheritedWidgetOfExactType<Scope>()!.services;
+}
+
+/// A line for the user that clears itself after a few seconds.
+class Notice extends ValueNotifier<String?> {
+  Notice() : super(null);
+
+  Timer? _clear;
+
+  void show(String text) {
+    _clear?.cancel();
+    value = text;
+    _clear = Timer(const Duration(seconds: 4), () => value = null);
+  }
+
+  @override
+  void dispose() {
+    _clear?.cancel();
+    super.dispose();
+  }
 }
 
 /// Makes [Services] available below it. Never changes, so never rebuilds.

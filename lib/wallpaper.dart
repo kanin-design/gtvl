@@ -20,8 +20,14 @@ const gradients = <(String, List<Color>)>[
   ('Graphite', [Color(0xFF111214), Color(0xFF26282C), Color(0xFF3A3D42)]),
 ];
 
+/// The quiet dark gradient under films and pictures.
+final _graphite = gradients.firstWhere((gradient) => gradient.$1 == 'Graphite').$2;
+
 /// The background: Apple aerials, videos, pictures, or a gradient.
-/// The gradient also shows while a video loads, or if it cannot play.
+/// Under films and pictures lies a quiet dark one (Graphite), which shows
+/// while the first film loads, or if none can play: not a coloured gradient
+/// flashing up at start. With no videos or pictures left to show, the
+/// chosen gradient shows instead.
 class Wallpaper extends StatelessWidget {
   const Wallpaper({super.key});
 
@@ -32,7 +38,13 @@ class Wallpaper extends StatelessWidget {
       listenable: s.config,
       builder: (context, _) {
         final config = s.config;
-        final colors = gradients[config.gradient.clamp(0, gradients.length - 1)].$2;
+        final plain = switch (config.wallpaper) {
+          'gradient' => true,
+          'video' => config.videos.isEmpty,
+          'image' => config.pictures.isEmpty,
+          _ => false,
+        };
+        final colors = plain ? gradients[config.gradient.clamp(0, gradients.length - 1)].$2 : _graphite;
         final size = MediaQuery.sizeOf(context) * MediaQuery.devicePixelRatioOf(context);
         return Stack(
           fit: StackFit.expand,

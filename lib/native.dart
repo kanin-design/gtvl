@@ -116,8 +116,9 @@ abstract final class Native {
   static Future<void> uninstall(String package) => _main.invokeMethod('uninstall', package);
 
   /// Whether the button service is on, and the remotes connected now, with
-  /// which of [keys] (Android's names for them) each one has.
-  static Future<({bool on, List<({String id, String name, List<String> keys})> remotes})> buttons(
+  /// which of [keys] (Android's names for them) each one has, and whether it
+  /// has sent GTVL a key (is [used]).
+  static Future<({bool on, List<({String id, String name, List<String> keys, bool used})> remotes})> buttons(
     List<String> keys,
   ) async {
     final reply = await _main.invokeMapMethod<String, Object?>('buttons', keys) ?? const {};
@@ -126,7 +127,7 @@ abstract final class Native {
       remotes: [
         for (final remote in reply['remotes'] as List? ?? const [])
           if (remote case {'id': final String id, 'name': final String name, 'keys': final List<Object?> keys})
-            (id: id, name: name, keys: keys.whereType<String>().toList()),
+            (id: id, name: name, keys: keys.whereType<String>().toList(), used: remote['used'] == true),
       ],
     );
   }
@@ -177,8 +178,9 @@ abstract final class Native {
   static Future<void> openSettings([String? action]) => _main.invokeMethod('settings', action);
 
   /// This copy of GTVL, and what Android allows for its updates: [allowed]
-  /// to install apps at all (the user's switch), and [quiet] updates of
-  /// itself without asking (Android 12 on). [room]: free bytes for a download.
+  /// to install apps at all (the user's switch), and [quiet]: Android 12 or
+  /// later, which updates GTVL without asking once that switch is on too.
+  /// [room]: free bytes for a download.
   static Future<({String version, int build, List<String> abis, bool allowed, bool quiet, int room})>
   updateInfo() async {
     final info = await _main.invokeMapMethod<String, Object?>('updateInfo') ?? const {};

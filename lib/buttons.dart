@@ -101,6 +101,18 @@ ButtonInfo buttonInfo(String remote, String key) =>
           : key[0] + key.substring(1).toLowerCase().replaceAll('_', ' '),
     );
 
+/// A remote's [name] as Android gives it ("BT_RC833A_B3 Consumer Control",
+/// "virtual-remote"), tidied for reading: no underscores or dashes, no
+/// interface name at the end, a capital first letter.
+String remoteName(String name) {
+  final tidy = name
+      .replaceAll(RegExp('[_-]+'), ' ')
+      .replaceAll(RegExp(r'\s+(consumer control|keyboard|keypad)$', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return tidy.isEmpty ? 'Remote' : tidy[0].toUpperCase() + tidy.substring(1);
+}
+
 /// Lists [keys] in [knownButtons]' order, then any others by name.
 List<String> inButtonOrder(Iterable<String> keys) {
   final order = knownButtons.keys.toList();

@@ -11,7 +11,7 @@ class StatusModel extends ChangeNotifier with WidgetsBindingObserver {
   StatusModel(this._config) {
     Native.events.where((event) => event['type'] == 'network').listen((event) {
       kind = event['kind'] as String? ?? 'none';
-      online = event['online'] == true;
+      online.value = event['online'] == true;
       vpn = event['vpn'] == true;
       signal = event['signal'] as int? ?? _unknown;
       notifyListeners();
@@ -27,7 +27,10 @@ class StatusModel extends ChangeNotifier with WidgetsBindingObserver {
 
   /// none, wifi, ethernet, cellular or other.
   String kind = 'none';
-  bool online = false;
+
+  /// The network reaches the internet. Listened to by itself, so the
+  /// wallpaper can try again the moment it comes back.
+  final online = ValueNotifier(false);
   bool vpn = false;
 
   /// Wi-Fi strength in dBm.

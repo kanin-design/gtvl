@@ -27,8 +27,9 @@ enum UpdateState { idle, checking, latest, downloading, ready, installing, faile
 /// once it is published; drafts and pre-releases don't.
 ///
 /// With [Config.autoUpdate] on, this happens every few hours by itself. Where
-/// Android lets GTVL update itself without asking (Android 12 on), the update
-/// then installs as the TV goes to standby; elsewhere it waits in About.
+/// Android lets GTVL update itself without asking (Android 12 on, once the
+/// user has let GTVL install apps), the update then installs as the TV goes
+/// to standby; elsewhere it waits in About.
 class Updates extends ChangeNotifier {
   Updates(this._config, this._cache);
 
@@ -54,8 +55,8 @@ class Updates extends ChangeNotifier {
   /// This copy's version name, e.g. "0.2.2".
   String version = '';
 
-  /// Android lets GTVL install apps (the user's switch), and update itself
-  /// without asking (Android 12 on).
+  /// Android lets GTVL install apps (the user's switch), and could let it
+  /// update itself without asking (Android 12 on), which takes that switch too.
   bool allowed = false, quiet = false;
 
   int _build = 0, _room = 0;
@@ -66,6 +67,11 @@ class Updates extends ChangeNotifier {
 
   /// An update at standby turned out to need the user: it waits for them.
   bool _ask = false;
+
+  /// Install was chosen before the user's switch was on. The first return to
+  /// GTVL settles it: the install goes ahead if the switch is on by then, and
+  /// is dropped if not, so it can't start by itself days later.
+  bool _installWhenAllowed = false;
 
   /// Version codes whose download failed its checks: not fetched again until
   /// GTVL restarts, so a bad release doesn't download every few hours.
@@ -78,7 +84,7 @@ class Updates extends ChangeNotifier {
   bool get busy => state == UpdateState.checking || state == UpdateState.downloading || state == UpdateState.installing;
 
   /// An update is ready and waits for the user, rather than installing by itself at standby.
-  bool get waiting => state == UpdateState.ready && (_ask || !_config.autoUpdate || !quiet);
+  bool get waiting => state == UpdateState.ready && (_ask || !_config.autoUpdate || !quiet || !allowed);
 
   Future<void> start() async {
     Native.events.where((event) => event['type'] == 'update').listen(_onInstaller);
@@ -99,17 +105,22 @@ class Updates extends ChangeNotifier {
     super.dispose();
   }
 
-  /// Back in GTVL: whether it may install now (after Android's switch), and
-  /// an install whose confirmation was left unanswered (Home) is ready again.
+  /// Back in GTVL: whether it may install now (after Android's switch), going
+  /// ahead with an install chosen before it was on (or dropping it), and an
+  /// install whose confirmation was left unanswered (Home) is ready again.
   /// One confirmed ends GTVL's process well before the wait is up.
-  void _resumed() {
-    _refresh();
+  Future<void> _resumed() async {
     _settle?.cancel();
     if (state == UpdateState.installing) {
       _settle = Timer(const Duration(seconds: 10), () {
         if (state == UpdateState.installing) _set(UpdateState.ready);
       });
     }
+    await _refresh();
+    _offer();
+    final goAhead = _installWhenAllowed && allowed;
+    _installWhenAllowed = false;
+    if (goAhead) await install();
   }
 
   void setAuto(bool on) {
@@ -139,7 +150,9 @@ class Updates extends ChangeNotifier {
         _set(UpdateState.latest);
         return;
       }
-      if (_rejected.contains(found.build)) throw _Problem('Version ${found.version} failed its checks.');
+      if (_rejected.contains(found.build)) {
+        throw _Problem("Version ${found.version} failed GTVL's checks, so it won't be installed.");
+      }
       await _download(found);
     } on Object catch (e) {
       // Anything at all, so a check never stays busy.
@@ -149,23 +162,28 @@ class Updates extends ChangeNotifier {
     }
   }
 
-  /// Installs the update that is ready. Before Android 12, GTVL first needs
-  /// the user's leave to install apps: they turn the switch on and come back.
-  /// From Android 12 it updates itself without it; should Android still want
-  /// to ask, it shows its own screen for that.
+  /// Installs the update that is ready. GTVL first needs the user's leave to
+  /// install apps: they turn the switch on and come back, and the install
+  /// goes ahead. Android 12 and later want that switch too, even for an app
+  /// updating itself; with it, they install without asking.
   Future<void> install() async {
     final apk = _apk;
     if (apk == null || state != UpdateState.ready) return;
+    _installWhenAllowed = false;
     await _refresh();
-    if (!allowed && !quiet) {
-      await Native.allowUpdates();
+    // A second press while that was asked finds the first already installing.
+    if (state != UpdateState.ready) return;
+    if (!allowed) {
+      _installWhenAllowed = true;
+      // No settings page opened, so GTVL won't be left and come back.
+      if (!await Native.allowUpdates()) _installWhenAllowed = false;
       return;
     }
     _set(UpdateState.installing);
     try {
       await Native.installUpdate(apk);
     } on PlatformException catch (e) {
-      problem = "Android couldn't install it (${e.message}).";
+      problem = "Android couldn't install the update (${e.message}).";
       _set(UpdateState.failed);
     }
   }
@@ -184,15 +202,15 @@ class Updates extends ChangeNotifier {
       default:
         final message = event['message'];
         problem = message is String && message.isNotEmpty
-            ? "Android couldn't install it ($message)."
-            : "Android couldn't install it.";
+            ? "Android couldn't install the update ($message)."
+            : "Android couldn't install the update.";
         _set(UpdateState.failed);
     }
   }
 
   /// Has the ready update install at the next standby, if that needs no one.
   void _offer() {
-    final quietly = state == UpdateState.ready && _config.autoUpdate && quiet && !_ask;
+    final quietly = state == UpdateState.ready && _config.autoUpdate && quiet && allowed && !_ask;
     Native.updateAtStandby(quietly ? _apk : null);
   }
 
@@ -221,7 +239,7 @@ class Updates extends ChangeNotifier {
       final bytes = <int>[];
       await for (final chunk in response.timeout(_timeout)) {
         bytes.addAll(chunk);
-        if (bytes.length > 64 * 1024) throw const _Problem("The latest release's update file is too big.");
+        if (bytes.length > 64 * 1024) throw const _Problem('The update details on GitHub are too big to read.');
       }
       final found = _parse(jsonDecode(utf8.decode(bytes)));
       return found.build > _build ? found : null;
@@ -248,7 +266,7 @@ class Updates extends ChangeNotifier {
         return _forThisTv(version, tag, files, data['notes']);
       }
     }
-    throw const _Problem("The latest release's update file can't be read.");
+    throw const _Problem("The update details on GitHub can't be read.");
   }
 
   /// The first of this TV's processor kinds, in Android's order of
@@ -271,7 +289,7 @@ class Updates extends ChangeNotifier {
         );
       }
     }
-    throw const _Problem('The latest release has no APK for this TV.');
+    throw const _Problem('The latest version has no download for this TV.');
   }
 
   /// Downloads [found] unless it's here already, then has Android's side check it.
@@ -320,7 +338,7 @@ class Updates extends ChangeNotifier {
       try {
         await for (final chunk in response.timeout(_timeout)) {
           received += chunk.length;
-          if (received > found.size) throw const _Problem('The download was bigger than the release says.');
+          if (received > found.size) throw const _Problem('The download was bigger than expected.');
           sink.add(chunk);
           // Each whole per cent, not each chunk.
           final done = received / found.size;
@@ -385,7 +403,7 @@ class Updates extends ChangeNotifier {
     _Problem(:final text) => text,
     SocketException() || TimeoutException() || HandshakeException() => "Couldn't reach GitHub.",
     HttpException() => "GitHub didn't answer as expected.",
-    FormatException() => "The latest release's update file can't be read.",
+    FormatException() => "The update details on GitHub can't be read.",
     FileSystemException() => "Couldn't save the download.",
     _ => 'Something went wrong.',
   };

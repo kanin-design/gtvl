@@ -10,14 +10,11 @@ import 'ui.dart';
 
 /// One row of a [GlassMenu].
 class MenuItem {
-  const MenuItem(this.label, this.onPressed, {this.icon, this.checked = false, this.destructive = false});
+  const MenuItem(this.label, this.onPressed, {this.icon, this.destructive = false});
 
   final String label;
   final VoidCallback onPressed;
   final IconData? icon;
-
-  /// Shows a check mark, for on/off items.
-  final bool checked;
 
   /// Red, for removing or deleting.
   final bool destructive;
@@ -25,7 +22,7 @@ class MenuItem {
 
 /// A centred frosted-glass menu: a header, groups of rows split by a
 /// full-width hairline (rows within a group by an inset one), and an
-/// optional centred action at the bottom.
+/// optional centred action at the bottom. Focus fills a row as in settings.
 class GlassMenu extends StatefulWidget {
   const GlassMenu({super.key, required this.title, this.subtitle, this.leading, required this.groups, this.footer});
 
@@ -78,10 +75,10 @@ class _GlassMenuState extends State<GlassMenu> {
       child: SizedBox(
         width: 360,
         child: Glass(
-          tint: const Color(0x8C1C1C1E),
+          tint: const Color(0xA61C1C1E),
           sigma: 30,
           radius: BorderRadius.circular(22),
-          border: Border.all(color: Look.hairline),
+          rim: true,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -96,8 +93,16 @@ class _GlassMenuState extends State<GlassMenu> {
                       textAlign: TextAlign.center,
                       style: Look.body.copyWith(fontWeight: FontWeight.w600),
                     ),
+                    // A sentence or two reads better from the left.
                     if (widget.subtitle case final subtitle?)
-                      Text(subtitle, textAlign: TextAlign.center, style: Look.small),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Prose(
+                          subtitle,
+                          textAlign: subtitle.length > 80 ? TextAlign.left : TextAlign.center,
+                          style: Look.small.copyWith(height: 1.4),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -106,11 +111,15 @@ class _GlassMenuState extends State<GlassMenu> {
                 child: FocusTraversalGroup(
                   policy: smoothTraversal,
                   child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
                     child: Column(mainAxisSize: MainAxisSize.min, children: rows),
                   ),
                 ),
               ),
-              if (widget.footer case final footer?) ...[const Hairline(), _MenuRow(footer, centered: true)],
+              if (widget.footer case final footer?) ...[
+                const Hairline(),
+                Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: _MenuRow(footer, centered: true)),
+              ],
             ],
           ),
         ),
@@ -132,6 +141,7 @@ class _Divider extends StatelessWidget {
   Widget build(BuildContext context) => ValueListenableBuilder(
     valueListenable: focused,
     builder: (context, row, line) => Opacity(opacity: row == below || row == below - 1 ? 0 : 1, child: line),
+    // Level with the rows' text: their margin, padding, icon and gap.
     child: const Hairline(indent: 46),
   );
 }
@@ -154,18 +164,28 @@ class _MenuRow extends StatelessWidget {
       final text = Text(item.label, style: Look.body.copyWith(color: color));
       return AnimatedContainer(
         duration: Look.fast,
-        color: focused ? Look.focusFill : const Color(0x00FFFFFF),
-        constraints: const BoxConstraints(minHeight: 36),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        margin: const EdgeInsets.symmetric(horizontal: 6),
+        decoration: BoxDecoration(
+          color: focused ? Look.focusFill : const Color(0x00FFFFFF),
+          border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        constraints: const BoxConstraints(minHeight: 38),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
         alignment: centered ? Alignment.center : Alignment.centerLeft,
         child: centered
-            ? text
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (item.icon != null) ...[Icon(item.icon, size: 18, color: color), const SizedBox(width: 8)],
+                  text,
+                ],
+              )
             : Row(
                 children: [
                   SizedBox(width: 18, child: item.icon == null ? null : Icon(item.icon, size: 18, color: color)),
                   const SizedBox(width: 12),
                   Expanded(child: text),
-                  if (item.checked) const Icon(Icons.check_rounded, size: 20, color: Look.white),
                 ],
               ),
       );
@@ -179,12 +199,13 @@ Future<void> showButtonsPrompt(BuildContext context) {
   final navigator = Navigator.of(context);
   return navigator.push(
     overlayRoute(
+      barrier: const Color(0x59000000),
       (context) => GlassMenu(
         leading: const Icon(Icons.settings_remote_outlined, size: 30, color: Look.white),
         title: 'Turn on button remapping',
         subtitle:
             'In Android settings, go to Device Preferences › Accessibility › Services › GTVL buttons, '
-            'and turn it on. On Google TV, Accessibility is under System. Android warns that it could see '
+            'and turn it on. On Google TV, Accessibility is under System. Android will warn that GTVL could see '
             'what you type: GTVL only acts on the buttons you change, and never reads the screen.',
         groups: [
           [
@@ -211,7 +232,7 @@ Future<void> showAppMenu(BuildContext context, AppInfo app, {VoidCallback? onMov
   }
 
   return navigator.push(
-    overlayRoute((context) {
+    overlayRoute(barrier: const Color(0x59000000), (context) {
       final inDock = s.apps.inDock(app.package);
       return GlassMenu(
         leading: SizedBox(
@@ -220,15 +241,20 @@ Future<void> showAppMenu(BuildContext context, AppInfo app, {VoidCallback? onMov
           child: ClipRRect(borderRadius: BorderRadius.circular(8), child: TileFace(app)),
         ),
         title: app.label,
-        subtitle: app.package,
         groups: [
           [
-            MenuItem('Open', () => then(() => Native.launch(app.package)), icon: Icons.open_in_new),
+            MenuItem(
+              'Open',
+              () => then(() async {
+                if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.label}");
+              }),
+              icon: Icons.open_in_new,
+            ),
+            // A filled star while the app is a favourite, in the dock.
             MenuItem(
               'Favourite',
               () => then(() => s.apps.toggleDock(app.package)),
-              icon: Icons.star_outline_rounded,
-              checked: inDock,
+              icon: inDock ? Icons.star_rounded : Icons.star_outline_rounded,
             ),
             if (onMove != null) MenuItem('Move', () => then(onMove), icon: Icons.open_with),
             MenuItem('Hide', () => then(() => s.apps.hide(app.package)), icon: Icons.visibility_off_outlined),
@@ -238,7 +264,12 @@ Future<void> showAppMenu(BuildContext context, AppInfo app, {VoidCallback? onMov
         // Android won't uninstall an app built into the TV.
         footer: app.system
             ? null
-            : MenuItem('Uninstall', () => then(() => Native.uninstall(app.package)), destructive: true),
+            : MenuItem(
+                'Uninstall',
+                () => then(() => Native.uninstall(app.package)),
+                icon: Icons.delete_outline_rounded,
+                destructive: true,
+              ),
       );
     }),
   );

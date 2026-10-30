@@ -10,8 +10,9 @@ import 'ui.dart';
 /// An app on the home screen: its TV banner, or its icon and name on a card;
 /// with [square], its icon in a rounded square.
 ///
-/// Focus lifts the tile toward the viewer: it grows and casts a soft shadow.
-/// No outline, no gloss.
+/// Focus lifts the tile toward the viewer: it grows, casts a soft shadow,
+/// and light catches its edge. Every tile has a faint edge, so dark icons
+/// keep their shape on dark glass. OK sinks it a little. No outline, no gloss.
 class AppTile extends StatelessWidget {
   const AppTile({
     super.key,
@@ -40,7 +41,8 @@ class AppTile extends StatelessWidget {
   final bool moving;
   final KeyEventResult Function(KeyEvent event)? onKey;
 
-  static const _lifted = [BoxShadow(color: Color(0x8C000000), blurRadius: 22, offset: Offset(0, 10))];
+  static const _lifted = [BoxShadow(color: Color(0xA6000000), blurRadius: 30, offset: Offset(0, 14))];
+  static const _edge = Color(0x24FFFFFF), _litEdge = Color(0x52FFFFFF);
 
   @override
   Widget build(BuildContext context) => Pressable(
@@ -48,6 +50,7 @@ class AppTile extends StatelessWidget {
     onPressed: onLaunch,
     onLongPress: onMenu,
     onKey: onKey,
+    dip: true,
     builder: (context, focused) {
       final lift = focused || moving;
       final corners = BorderRadius.circular(radius);
@@ -59,14 +62,15 @@ class AppTile extends StatelessWidget {
             const Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(Icons.chevron_left, color: Look.white, shadows: Look.shadow),
-                Icon(Icons.chevron_right, color: Look.white, shadows: Look.shadow),
+                Icon(Icons.chevron_left_rounded, color: Look.white, shadows: Look.shadow),
+                Icon(Icons.chevron_right_rounded, color: Look.white, shadows: Look.shadow),
               ],
             ),
         ],
       );
+      final edge = BorderSide(color: lift ? _litEdge : _edge);
       final tile = AnimatedScale(
-        scale: lift ? 1.1 : 1,
+        scale: lift ? 1.12 : 1,
         duration: Look.fast,
         curve: Look.ease,
         child: AnimatedContainer(
@@ -79,6 +83,12 @@ class AppTile extends StatelessWidget {
                   shadows: lift ? _lifted : const [],
                 )
               : BoxDecoration(borderRadius: corners, boxShadow: lift ? _lifted : const []),
+          // The edge is drawn over the picture, inside the tile.
+          foregroundDecoration: square
+              ? ShapeDecoration(
+                  shape: RoundedSuperellipseBorder(borderRadius: corners, side: edge),
+                )
+              : BoxDecoration(borderRadius: corners, border: Border.fromBorderSide(edge)),
           child: square
               ? ClipRSuperellipse(borderRadius: corners, child: face)
               : ClipRRect(borderRadius: corners, child: face),
@@ -97,7 +107,12 @@ class AppTile extends StatelessWidget {
               child: AnimatedOpacity(
                 opacity: focused ? 1 : 0,
                 duration: Look.fast,
-                child: Text(app.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Look.label),
+                child: Text(
+                  app.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Look.label.copyWith(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
               ),
             ),
           ],
@@ -155,7 +170,7 @@ class TileFace extends StatelessWidget {
             maxLines: narrow ? 1 : 2,
             overflow: TextOverflow.ellipsis,
             textAlign: narrow ? TextAlign.center : TextAlign.start,
-            style: Look.small.copyWith(color: Look.white, fontSize: narrow ? (height * 0.2).clamp(9.0, 12.0) : null),
+            style: Look.small.copyWith(color: Look.white, fontSize: narrow ? (height * 0.2).clamp(11.0, 13.0) : null),
           );
           if (!narrow) {
             return Padding(

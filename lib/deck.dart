@@ -70,10 +70,19 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
   /// Bumped on every new start, so answers from before it are thrown away.
   int _run = 0;
 
-  /// Films that failed in a row; after a few, the gradient shows instead
-  /// until GTVL next comes to the front.
+  /// Films that failed in a row; after a few, the gradient shows instead,
+  /// and a new try comes after a wait that grows with each miss, at once
+  /// when the network comes back, or when GTVL next comes to the front.
   int _failures = 0;
   static const _attempts = 3;
+  static const _waits = [Duration(seconds: 5), Duration(seconds: 15), Duration(minutes: 1), Duration(minutes: 5)];
+  int _misses = 0;
+  Timer? _retry;
+
+  /// Gave up on films that failed: waiting to try again, after [_stalledAfter].
+  bool _stalled = false;
+  Scene? _stalledAfter;
+  late final ValueNotifier<bool> _online;
 
   /// How long the scene playing has shown.
   final _shown = Stopwatch();
@@ -85,6 +94,7 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _beneath = Services.of(context).hdrBeneath;
+    _online = Services.of(context).status.online..addListener(_onOnline);
     _live++;
     _events = Native.events.where((event) => event['type'] == 'hdr').listen(_onEvent);
     // The wallpaper's place turns see-through after this frame, not during it.
@@ -107,6 +117,8 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _online.removeListener(_onOnline);
+    _retry?.cancel();
     _events?.cancel();
     _run++;
     Native.hdrStop();
@@ -131,7 +143,7 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
         if (_playing) {
           Native.hdrResume();
         } else {
-          _failures = 0;
+          _failures = _misses = 0;
           _start();
         }
       case AppLifecycleState.inactive:
@@ -139,6 +151,8 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
       case AppLifecycleState.hidden || AppLifecycleState.paused || AppLifecycleState.detached:
         // Another app gets the decoder and the memory.
         _run++;
+        _retry?.cancel();
+        _stalled = false;
         _playing = false;
         Native.hdrStop();
         if (mounted) setState(() => _covered = true);
@@ -169,7 +183,8 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
     if (!_playing) return;
     switch (event['what']) {
       case 'frame':
-        _failures = 0;
+        _failures = _misses = 0;
+        _stalled = false;
         if (_covered) _reveal();
       case 'next':
         _failures = 0;
@@ -185,19 +200,42 @@ class _HdrScenePlayerState extends State<HdrScenePlayer> with WidgetsBindingObse
         if (++_failures < _attempts) {
           _start(_current);
         } else {
-          _giveUp();
+          _giveUp(retry: true);
         }
     }
   }
 
   /// Nothing will play (offline, no scenes chosen, films this TV can't
-  /// decode): the gradient shows until GTVL next comes to the front.
-  void _giveUp() {
+  /// decode): the gradient shows. With [retry] (films failed), a new try
+  /// comes after a wait, or at once when the network comes back.
+  void _giveUp({bool retry = false}) {
+    final after = _current;
     _run++;
     _playing = false;
     Native.hdrStop();
     _beneath.value = false;
     setState(() => _covered = false);
+    _retry?.cancel();
+    _stalled = retry;
+    _stalledAfter = after;
+    if (!retry || _misses >= _waits.length) return;
+    final run = _run;
+    _retry = Timer(_waits[_misses++], () {
+      if (run == _run && _stalled) _tryAgain();
+    });
+  }
+
+  /// The network is back: a stalled player tries again at once.
+  void _onOnline() {
+    if (!_online.value || !_stalled || !_inFront) return;
+    _retry?.cancel();
+    _tryAgain();
+  }
+
+  void _tryAgain() {
+    _stalled = false;
+    _failures = 0;
+    _start(_stalledAfter);
   }
 
   /// The film playing shows: lift the black once its first frames are up.

@@ -71,7 +71,7 @@ class MainActivity : FlutterActivity() {
     private val updater by lazy { Updater(this) }
     private val prefs by lazy { Updater.prefs(this) }
 
-    /** A checked update to install as the TV goes to standby, without asking (Android 12 on). */
+    /** A checked update to install as the TV goes to standby, without asking (Android 12 on, once allowed). */
     private var standbyUpdate: String? = null
 
     // GTVL's screen draws see-through where an HDR film shows beneath it
@@ -593,9 +593,24 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * Remotes connected now, as {id, name, keys}: which of [keys] (Android's
-     * names for them) each one has. The TV's own buttons and virtual devices
-     * are left out.
+     * Remotes that have sent GTVL a key, by [ButtonService.remoteId]: the ones
+     * in use, where a TV also lists devices that are no remote to hold.
+     */
+    private val usedRemotes by lazy { prefs.getStringSet(USED_REMOTES, null).orEmpty().toMutableSet() }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        event.device?.let { device ->
+            if (usedRemotes.add(ButtonService.remoteId(device))) {
+                prefs.edit().putStringSet(USED_REMOTES, usedRemotes.toSet()).apply()
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * Remotes connected now, as {id, name, keys, used}: which of [keys]
+     * (Android's names for them) each one has, and whether it has sent GTVL a
+     * key. The TV's own buttons and virtual devices are left out.
      */
     private fun remotes(keys: List<String>): List<Map<String, Any>> {
         val codes = keys.map { KeyEvent.keyCodeFromString("KEYCODE_$it") }.toIntArray()
@@ -607,10 +622,12 @@ class MainActivity : FlutterActivity() {
             .distinctBy(ButtonService::remoteId)
             .map { device ->
                 val has = device.hasKeys(*codes)
+                val id = ButtonService.remoteId(device)
                 mapOf(
-                    "id" to ButtonService.remoteId(device),
+                    "id" to id,
                     "name" to device.name,
                     "keys" to keys.filterIndexed { i, _ -> codes[i] != KeyEvent.KEYCODE_UNKNOWN && has[i] },
+                    "used" to (id in usedRemotes),
                 )
             }
     }
@@ -710,6 +727,9 @@ class MainActivity : FlutterActivity() {
         private const val TV_REQUEST = 2
         /** Where TVs send the settings pages they lack: a stub that only says so. */
         internal const val STUBS = "com.google.android.tv.frameworkpackagestubs"
+
+        /** Kept in [Updater.prefs]: the remotes that have sent GTVL a key. */
+        private const val USED_REMOTES = "usedRemotes"
 
         // Kept in [Updater.prefs]: give the screen back on the next Home, as of which boot.
         private const val GIVE_BACK = "giveBack"

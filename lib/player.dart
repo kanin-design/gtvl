@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:video_player/video_player.dart';
 
 import 'aerials.dart';
+import 'services.dart';
 
 /// Plays scenes back to back with a crossfade, drawn into GTVL's screen.
 /// HDR scenes play beneath it instead (see HdrScenePlayer).
@@ -12,6 +13,9 @@ import 'aerials.dart';
 /// One video decodes at a time, except during a scene's last seconds while
 /// the next one buffers, and none at all while another app is in front, so
 /// that app gets the hardware video decoders and the memory.
+///
+/// When no scene will open (the TV started before its network was up, say),
+/// it tries again after a while, and at once when the network comes back.
 class ScenePlayer extends StatefulWidget {
   const ScenePlayer({
     super.key,
@@ -64,9 +68,23 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   /// Scenes tried in a row before giving up (offline, unsupported codec).
   static const _attempts = 3;
 
+  /// After giving up, the waits before each new try; past the last, only the
+  /// network coming back (or GTVL coming to the front) tries again.
+  static const _waits = [Duration(seconds: 5), Duration(seconds: 15), Duration(minutes: 1), Duration(minutes: 5)];
+
   _Layer? _out, _now, _next;
   bool _preparing = false;
   bool _fading = false;
+
+  /// The last [_prepare] tried [_attempts] scenes and none would open.
+  bool _gaveUp = false;
+
+  /// Nothing would open: waiting to try again, after [_stalledAfter].
+  bool _stalled = false;
+  Scene? _stalledAfter;
+  int _misses = 0;
+  Timer? _retry;
+  late final ValueNotifier<bool> _online;
 
   /// Bumped on every stop, so async work from before it is thrown away.
   int _run = 0;
@@ -76,6 +94,7 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _online = Services.of(context).status.online..addListener(_onOnline);
     if (_inFront) _start();
   }
 
@@ -96,6 +115,7 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _online.removeListener(_onOnline);
     _release();
     super.dispose();
   }
@@ -123,8 +143,34 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   void _start([Scene? after]) {
     final run = _run;
     _prepare(after).then((layer) {
-      if (layer != null && run == _run) _show(layer);
+      if (run != _run) return;
+      if (layer != null) {
+        _stalled = false;
+        _misses = 0;
+        _show(layer);
+      } else if (_gaveUp) {
+        _stall(after);
+      }
     });
+  }
+
+  /// No scene would open: try again after a wait that grows with each miss.
+  void _stall(Scene? after) {
+    _stalled = true;
+    _stalledAfter = after;
+    _retry?.cancel();
+    if (_misses >= _waits.length) return;
+    final run = _run;
+    _retry = Timer(_waits[_misses++], () {
+      if (run == _run && _stalled) _start(after);
+    });
+  }
+
+  /// The network is back: a stalled player tries again at once.
+  void _onOnline() {
+    if (!_online.value || !_stalled || !_inFront) return;
+    _retry?.cancel();
+    _start(_stalledAfter);
   }
 
   /// A new choice of scenes: drops the next scene, if one was ready, and
@@ -140,6 +186,9 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   void _release() {
     _run++;
     _fadeDone?.cancel();
+    _retry?.cancel();
+    _stalled = false;
+    _misses = 0;
     for (final layer in {_out, _now, _next}) {
       layer?.video.removeListener(_tick);
       layer?.video.dispose();
@@ -152,6 +201,7 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   Future<_Layer?> _prepare(Scene? previous) async {
     if (_preparing) return null;
     _preparing = true;
+    _gaveUp = false;
     final run = _run;
     try {
       for (var attempt = 0; attempt < _attempts; attempt++) {
@@ -178,6 +228,7 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
           await video.dispose();
         }
       }
+      _gaveUp = run == _run;
       return null;
     } finally {
       if (run == _run) _preparing = false;

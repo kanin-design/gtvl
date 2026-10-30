@@ -21,8 +21,10 @@ import java.security.MessageDigest
  * size and SHA-256 its release names, GTVL itself, newer than this copy, and
  * signed with the same key; Android checks the key again as it installs.
  *
- * From Android 12, GTVL may update itself without asking; older Android
- * asks the user to confirm each update.
+ * Either way the user must first let GTVL install apps (its switch under
+ * Android's "Install unknown apps"): Android 12 and later want it even for
+ * an app updating itself. With it, they update GTVL without asking; older
+ * Android asks the user to confirm each update.
  */
 class Updater(private val context: Context) {
     private val packages = context.packageManager

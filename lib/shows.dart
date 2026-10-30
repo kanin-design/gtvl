@@ -216,6 +216,17 @@ class _ShowCard extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   if (item.image case final image?) _Picture(image),
+                  // A dark line inside the white ring, so it shows on white pictures too.
+                  if (focused)
+                    Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0x73000000)),
+                        ),
+                      ),
+                    ),
                   if (item.progress case final progress?)
                     Positioned(
                       left: 0,

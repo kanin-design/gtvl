@@ -244,6 +244,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  /// Opens [app]; if Android won't, says so.
+  Future<void> _launch(AppInfo app) async {
+    if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.label}");
+  }
+
+  /// Opens [item] of a row from [source]; if it won't open, says so.
+  Future<void> _open(ShowItem item, String source) async {
+    if (!await Native.open(item.link, package: item.app)) s.notice.show("Couldn't open $source");
+  }
+
   /// The app menu. An app that leaves its list there (hidden, or moved
   /// between the dock and all apps) hands focus to the app now in its place.
   Future<void> _menu(AppInfo app) async {
@@ -285,6 +295,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             fit: StackFit.expand,
             children: [
               const Wallpaper(),
+              // A light vignette under the dock, so it and its names hold on bright films.
+              const IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x00000000), Color(0x00000000), Color(0x40000000)],
+                      stops: [0, 0.5, 1],
+                    ),
+                  ),
+                ),
+              ),
               // Dims the wallpaper behind the app grid.
               IgnorePointer(
                 child: FadeTransition(
@@ -326,17 +349,56 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             Transform.translate(offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)), child: dock),
                       ),
                     ),
-                    if (_moving != null)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        top: g.dockIdle - 46,
-                        child: const Center(child: _MoveHint()),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: g.dockIdle - 48,
+                      child: Center(
+                        child: ValueListenableBuilder<String?>(
+                          valueListenable: s.notice,
+                          builder: (context, notice, _) => AnimatedSwitcher(
+                            duration: Look.medium,
+                            switchInCurve: Look.ease,
+                            switchOutCurve: Curves.easeIn,
+                            child: switch ((_moving, notice)) {
+                              (_?, _) => const Pill(
+                                'Left and Right move the app · OK when done',
+                                key: ValueKey('move'),
+                              ),
+                              (_, final text?) => Pill(text, key: ValueKey(text)),
+                              _ => const SizedBox.shrink(),
+                            },
+                          ),
+                        ),
                       ),
+                    ),
                   ],
                 ),
               ),
-              Positioned(left: g.pad - 10, right: g.pad, top: g.height * 0.045, child: _topBar()),
+              // A shade behind the top bar while it shows, so the clock and icons read on bright films.
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: g.height * 0.32,
+                child: IgnorePointer(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _barShown,
+                    builder: (context, shown, shade) =>
+                        AnimatedOpacity(opacity: shown ? 1 : 0, duration: Look.medium, child: shade),
+                    child: const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0x80000000), Color(0x00000000)],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(left: g.pad - 13, right: g.pad, top: g.height * 0.05, child: _topBar()),
             ],
           );
         },
@@ -362,7 +424,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         tint: Color(c.glassTint).withValues(alpha: c.glassTintAlpha),
         border: c.lineWidth > 0 ? Border.symmetric(horizontal: line) : null,
         child: apps.isEmpty
-            ? Center(child: Text(s.apps.loaded ? 'Hold OK on an app to add it here' : '', style: Look.value))
+            ? Center(
+                child: Text(
+                  s.apps.loaded ? 'Hold OK on an app and choose Favourite to add it here' : '',
+                  style: Look.value,
+                ),
+              )
             : FocusTraversalGroup(
                 policy: smoothTraversal,
                 child: Align(
@@ -392,7 +459,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   autofocus: i == 0 && _onTop,
                                   moving: _moving == apps[i].package,
                                   onKey: _moving == apps[i].package ? _onMoveKey : null,
-                                  onLaunch: () => Native.launch(apps[i].package),
+                                  onLaunch: () => _launch(apps[i]),
                                   onMenu: () => _menu(apps[i]),
                                 ),
                               ),
@@ -445,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   pad: g.pad,
                   gap: g.baseGap,
                   cardWidth: (g.width - 2 * g.pad - 3 * g.baseGap) / 4,
-                  onOpen: (item) => Native.open(item.link, package: item.app),
+                  onOpen: (item) => _open(item, row.source),
                 ),
               ),
             if (rows.isNotEmpty)
@@ -483,7 +550,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       first: i % g.gridColumns == 0,
                       last: i % g.gridColumns == g.gridColumns - 1 || i == apps.length - 1,
                     ),
-                    onLaunch: () => Native.launch(apps[i].package),
+                    onLaunch: () => _launch(apps[i]),
                     onMenu: () => _menu(apps[i]),
                   ),
                 ),
@@ -521,7 +588,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Clock(h24: s.config.clock24),
+                // Level with the icons' middles.
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Clock(h24: s.config.clock24),
+                ),
                 ValueListenableBuilder<String?>(
                   valueListenable: s.caption,
                   builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption
@@ -566,28 +637,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           key: ValueKey(id),
           icon: s.status.vpn ? Icons.vpn_lock : Icons.vpn_lock_outlined,
           dim: !s.status.vpn,
-          onPressed: () => Native.launch(app.package),
+          onPressed: () async {
+            if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.name}");
+          },
         );
     }
     return null;
   }
 }
 
-/// What the keys do while a dock app is being moved; Back puts it down too.
-class _MoveHint extends StatelessWidget {
-  const _MoveHint();
-
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(color: const Color(0xB3000000), borderRadius: BorderRadius.circular(16)),
-    child: const Padding(
-      padding: EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-      child: Text('Left and Right move it · OK when done', style: Look.label),
-    ),
-  );
-}
-
-/// A top-bar icon. Focus brightens and enlarges it and puts a dot under it.
+/// A top-bar icon. Focus brightens it and sets it on a soft round light.
 class TopIcon extends StatelessWidget {
   const TopIcon({
     super.key,
@@ -615,39 +674,35 @@ class TopIcon extends StatelessWidget {
     onPressed: onPressed,
     builder: (context, focused) {
       final icon = Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedScale(
-              scale: focused ? 1.2 : 1,
-              duration: Look.fast,
-              curve: Look.ease,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Icon(
-                    this.icon,
-                    size: 22,
-                    color: Look.white.withValues(alpha: focused ? 1 : (dim ? 0.5 : 0.8)),
-                    shadows: Look.shadow,
-                  ),
-                  if (badge) const Positioned(right: -3, top: -2, child: Badge()),
-                ],
-              ),
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: AnimatedScale(
+          scale: focused ? 1.08 : 1,
+          duration: Look.fast,
+          curve: Look.ease,
+          child: AnimatedContainer(
+            duration: Look.fast,
+            curve: Look.ease,
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: focused ? const Color(0x38FFFFFF) : const Color(0x00FFFFFF),
+              border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
             ),
-            const SizedBox(height: 7),
-            AnimatedOpacity(
-              opacity: focused ? 1 : 0,
-              duration: Look.fast,
-              child: const SizedBox.square(
-                dimension: 4,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(color: Look.white, shape: BoxShape.circle),
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  this.icon,
+                  size: 22,
+                  color: Look.white.withValues(alpha: focused ? 1 : (dim ? 0.55 : 0.85)),
+                  shadows: focused ? null : Look.shadow,
                 ),
-              ),
+                if (badge) const Positioned(right: 7, top: 7, child: Badge()),
+              ],
             ),
-          ],
+          ),
         ),
       );
       if (!collapsed) return icon;
@@ -695,6 +750,18 @@ class _ClockState extends State<Clock> {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final hour = widget.h24 ? now.hour.toString().padLeft(2, '0') : '${(now.hour + 11) % 12 + 1}';
-    return Text('$hour:${now.minute.toString().padLeft(2, '0')}', style: Look.clock);
+    return Text.rich(
+      TextSpan(
+        text: '$hour:${now.minute.toString().padLeft(2, '0')}',
+        children: [
+          if (!widget.h24)
+            TextSpan(
+              text: now.hour < 12 ? ' am' : ' pm',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xCCFFFFFF)),
+            ),
+        ],
+      ),
+      style: Look.clock,
+    );
   }
 }
