@@ -39,11 +39,12 @@ class GlowLook {
   final double bleed, bleedSize, bleedPower;
   final (double, double, double) bleedTint;
 
-  /// The glow setting's steps, faintest first: the light pressed into the
-  /// glass (look M1), plus a rising share of the light behind it (K0), as
-  /// one lamp glowing behind the glass would add it; each fitted to its
-  /// traced reference (tool/glow/ladder.py; `looks/m1-fake.json` for 0, then
-  /// `looks/m1-<step>-fake.json`).
+  /// The glow setting's levels 1 to 3, faintest first: the light pressed
+  /// into the glass (look M1), plus a rising share of the light behind it
+  /// (K0), as one lamp glowing behind the glass would add it; each fitted to
+  /// its traced reference (tool/glow/ladder.py; `looks/m1-fake.json`, then
+  /// `looks/m1-1-fake.json` and `looks/m1-2-fake.json`; the brighter ones
+  /// traced there are left out for now).
   static const steps = [
     GlowLook(
       core: 0.1351,
@@ -90,70 +91,10 @@ class GlowLook {
       bleedPower: 1.275,
       bleedTint: (2.783, 0.5634, 0.07388),
     ),
-    GlowLook(
-      core: 0.0,
-      coreBlur: 0.885,
-      pool: 0.4747,
-      poolSize: 2.168,
-      poolPower: 0.6214,
-      glass: 0.009526,
-      glassLength: 10.53,
-      edges: 0.2743,
-      edgeLength: 18.49,
-      bleed: 0.0387,
-      bleedSize: 35.4,
-      bleedPower: 1.5,
-      bleedTint: (2.784, 0.5632, 0.0739),
-    ),
-    GlowLook(
-      core: 0.2845,
-      coreBlur: 11.7,
-      pool: 0.4904,
-      poolSize: 1.51,
-      poolPower: 0.5419,
-      glass: 0.0,
-      glassLength: 49.56,
-      edges: 0.2766,
-      edgeLength: 18.43,
-      bleed: 0.04944,
-      bleedSize: 35.4,
-      bleedPower: 1.5,
-      bleedTint: (2.784, 0.5631, 0.07392),
-    ),
-    GlowLook(
-      core: 0.2617,
-      coreBlur: 1.032,
-      pool: 0.5337,
-      poolSize: 5.419,
-      poolPower: 1.084,
-      glass: 0.0296,
-      glassLength: 60.18,
-      edges: 0.2901,
-      edgeLength: 18.43,
-      bleed: 0.06373,
-      bleedSize: 35.4,
-      bleedPower: 1.5,
-      bleedTint: (2.784, 0.5631, 0.07395),
-    ),
-    GlowLook(
-      core: 0.06467,
-      coreBlur: 0.3061,
-      pool: 0.8172,
-      poolSize: 3.761,
-      poolPower: 0.7522,
-      glass: 0.01107,
-      glassLength: 58.48,
-      edges: 0.2971,
-      edgeLength: 18.97,
-      bleed: 0.08288,
-      bleedSize: 35.4,
-      bleedPower: 1.5,
-      bleedTint: (2.784, 0.5632, 0.07399),
-    ),
   ];
 
-  /// The look of the glow setting's [step].
-  static GlowLook at(int step) => steps[step.clamp(0, steps.length - 1)];
+  /// The look of the glow setting's [level]: null for 0, off.
+  static GlowLook? of(int level) => level <= 0 ? null : steps[math.min(level, steps.length) - 1];
 
   /// The lamp's size against its app's tile.
   static const lampScale = 1.12;
@@ -199,6 +140,14 @@ class GlowLook {
     return (r0 + (r1 - r0) * f, g0 + (g1 - g0) * f, b0 + (b1 - b0) * f);
   }
 
+  /// What [heat] does to the glow drawn at 1, per channel: below 1 it dims
+  /// and reddens as glowing glass does as it cools, through deep red to
+  /// nothing, as quickly as the first molten glow did.
+  static (double, double, double) fade(double heat) {
+    final h = math.max(heat, 0.0);
+    return (math.pow(h, 1.45).toDouble(), math.pow(h, 2.5).toDouble(), math.pow(h, 3.2).toDouble());
+  }
+
   /// One lamp's light (luminance, before its heat) at an offset from its
   /// centre, for a lamp of half-sizes [hw], [hh] and corner [r]: what the
   /// shader computes, for the tiles' edges to catch.
@@ -231,7 +180,7 @@ class GlowLook {
   static double tone(double light) => 1 - math.exp(-exposure * light);
 }
 
-/// The shader, loaded once at start; null until then, when no glow is drawn.
+/// The shader, loaded once at start; until then no glow is drawn.
 abstract final class GlowShader {
   static ui.FragmentProgram? _program;
 
@@ -239,27 +188,32 @@ abstract final class GlowShader {
     _program ??= await ui.FragmentProgram.fromAsset('shaders/glow.frag');
   }
 
+  static bool get ready => _program != null;
+
   static ui.FragmentShader? create() => _program?.fragmentShader();
 }
 
-/// A lamp to draw: its centre along the dock, heat and stretch.
-typedef Spot = ({double x, double heat, double stretch});
+/// A lamp along the dock: its centre and heat; an [ember] is going out where
+/// focus was.
+typedef Spot = ({double x, double heat, bool ember});
 
-/// Sets [shader]'s uniforms to draw up to four [spots] in a [size] area whose
-/// band runs from [top] to [bottom], lamps centred at [y], of [hw] by [hh]
-/// half-sizes and corner [r], in [look]: the glass's own light, or with
-/// [wallpaper], the light the lamps throw on the wallpaper beyond the band.
+/// Sets [shader]'s uniforms to draw one lamp at [x], [y], of [hw] by [hh]
+/// half-sizes and corner [r], in [look] and [tint] (its colour times its
+/// heat), in a [size] area whose band runs from [top] to [bottom]: the
+/// glass's own light, or with [wallpaper], the light the lamp throws on the
+/// wallpaper beyond the band.
 void setGlow(
   ui.FragmentShader shader,
   Size size, {
   required GlowLook look,
+  required double x,
   required double y,
   required double hw,
   required double hh,
   required double r,
   required double top,
   required double bottom,
-  required List<Spot> spots,
+  required (double, double, double) tint,
   bool wallpaper = false,
 }) {
   var i = 0;
@@ -269,19 +223,149 @@ void setGlow(
     }
   }
 
+  final (tr, tg, tb) = tint;
   put([size.width, size.height]);
-  put([y, hw, hh, r]);
+  put([x, y, hw, hh]);
+  put([r, top, bottom, GlowLook.exposure]);
   put([look.core, look.coreBlur, look.pool, look.poolSize]);
   put([look.poolPower, look.glass, look.glassLength, look.edges]);
-  put([look.edgeLength, top, bottom, GlowLook.exposure]);
-  put([look.bleed, look.bleedSize, look.bleedPower, wallpaper ? 1 : 0]);
-  for (var k = 0; k < 4; k++) {
-    final spot = k < spots.length ? spots[k] : null;
-    if (spot == null || spot.heat <= 0) {
-      put([0, 0, 1, 0, 0, 0, 0, 0]);
-      continue;
+  put([look.edgeLength, look.bleed, look.bleedSize, look.bleedPower]);
+  put([tr, tg, tb, wallpaper ? 1 : 0]);
+}
+
+/// What a [GlowSprite] is drawn for: the look; the lamp's half-sizes and
+/// corner; the image's height, the lamp's centre and the band's top and
+/// bottom in it (dp); the wallpaper's light or the glass's; pixels a dp.
+typedef GlowKey = ({
+  GlowLook look,
+  double hw,
+  double hh,
+  double r,
+  double height,
+  double y,
+  double top,
+  double bottom,
+  bool wallpaper,
+  double ratio,
+});
+
+/// One lamp's glow, drawn once by the shader into images reaching [reach]
+/// either side of it, at the heat of an app in focus; flared too, for while
+/// OK is held; and in the glass softened, for a lamp going out, which
+/// softens as it dims so that no outline stays round the app it was behind.
+/// The glow is the same behind every app, so a frame only places it, dimmed
+/// and reddened by its heat: next to nothing for a slow TV.
+class GlowSprite {
+  GlowSprite._(this.key, this._shaders, this.image, this.flared, this.soft);
+
+  final GlowKey key;
+  final List<ui.FragmentShader> _shaders;
+
+  /// At the heat of an app in focus, at [flare], and softened for a lamp going out.
+  final ui.Image image;
+  final ui.Image? flared, soft;
+
+  /// How far it reaches either side of its lamp (dp): the glow is gone by then.
+  static const reach = 600.0;
+
+  /// The heat of an app in focus while OK is held.
+  static const flare = 1.35;
+
+  /// How much a lamp going out has softened by the time it is out (dp).
+  static const _softness = 10.0;
+
+  /// Draws them for [key]; null until the shader has loaded.
+  static GlowSprite? draw(GlowKey key) {
+    if (!GlowShader.ready || key.height <= 0 || key.ratio <= 0) return null;
+    final shaders = <ui.FragmentShader>[];
+    final size = Size(2 * reach, key.height);
+    ui.Image render(double heat) {
+      final shader = GlowShader.create()!;
+      shaders.add(shader);
+      final (cr, cg, cb) = key.wallpaper ? key.look.bleedTint : GlowLook.colour(heat);
+      setGlow(
+        shader,
+        size,
+        look: key.look,
+        x: reach,
+        y: key.y,
+        hw: key.hw,
+        hh: key.hh,
+        r: key.r,
+        top: key.top,
+        bottom: key.bottom,
+        tint: (cr * heat, cg * heat, cb * heat),
+        wallpaper: key.wallpaper,
+      );
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder)
+        ..scale(key.ratio)
+        ..drawRect(Offset.zero & size, Paint()..shader = shader);
+      return _image(recorder, size * key.ratio);
     }
-    final (cr, cg, cb) = wallpaper ? look.bleedTint : GlowLook.colour(spot.heat);
-    put([spot.x, spot.heat, spot.stretch, 0, cr, cg, cb, 0]);
+
+    final image = render(1);
+    if (key.wallpaper) return GlowSprite._(key, shaders, image, null, null);
+    final blur = _softness * key.ratio;
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawImage(
+      image,
+      Offset.zero,
+      Paint()..imageFilter = ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur, tileMode: TileMode.decal),
+    );
+    return GlowSprite._(key, shaders, image, render(flare), _image(recorder, size * key.ratio));
+  }
+
+  static ui.Image _image(ui.PictureRecorder recorder, Size pixels) {
+    final picture = recorder.endRecording();
+    final image = picture.toImageSync(pixels.width.ceil(), pixels.height.ceil());
+    picture.dispose();
+    return image;
+  }
+
+  /// Adds the lamp centred at [x] to [canvas], its image's top at [top]: at
+  /// [heat] (dimmed and reddened below 1, flaring above), times [opacity];
+  /// an [ember], going out, softening as it dims.
+  void place(Canvas canvas, double x, double top, {required double heat, bool ember = false, double opacity = 1}) {
+    final dst = Rect.fromLTWH(x - reach, top, 2 * reach, key.height);
+    // Its pixels as drawn, one to one: the image has whole pixels, a little more.
+    final src = Rect.fromLTWH(0, 0, 2 * reach * key.ratio, key.height * key.ratio);
+    void add(ui.Image image, (double, double, double) by) {
+      final (r, g, b) = by;
+      if (r <= 0) return;
+      canvas.drawImageRect(
+        image,
+        src,
+        dst,
+        Paint()
+          ..blendMode = BlendMode.plus
+          ..filterQuality = FilterQuality.low
+          // Its colours times r, g and b: the image's colours are premultiplied by its alpha.
+          ..colorFilter = ColorFilter.mode(Color.from(alpha: r, red: 1, green: g / r, blue: b / r), BlendMode.modulate),
+      );
+    }
+
+    final flared = this.flared;
+    if (heat > 1 && flared != null && !ember) {
+      final t = ((heat - 1) / (flare - 1)).clamp(0.0, 1.0);
+      add(image, ((1 - t) * opacity, (1 - t) * opacity, (1 - t) * opacity));
+      add(flared, (t * opacity, t * opacity, t * opacity));
+      return;
+    }
+    final h = math.min(heat, 1.0);
+    final (r, g, b) = GlowLook.fade(h);
+    // Going out, its light softens as it dims: from the lamp's own to the softened.
+    for (final (image, share) in [(image, ember ? h : 1.0), (soft ?? image, ember ? 1 - h : 0.0)]) {
+      if (share > 0) add(image, (r * opacity * share, g * opacity * share, b * opacity * share));
+    }
+  }
+
+  void dispose() {
+    image.dispose();
+    flared?.dispose();
+    soft?.dispose();
+    for (final shader in _shaders) {
+      shader.dispose();
+    }
   }
 }

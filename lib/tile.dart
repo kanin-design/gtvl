@@ -10,10 +10,10 @@ import 'apps.dart';
 import 'glow.dart';
 import 'ui.dart';
 
-/// The dock's light, as a tile sees it: where the lamp behind the glass is,
-/// by tile index (between two while it flows to the next), how hot it is
-/// (1 in focus, more while it flares), and the distance from one app's centre
-/// to the next.
+/// The dock's light, as a tile sees it: which tile the lamp behind the glass
+/// is behind, by index; how hot it is (1 in focus, more while it flares,
+/// less while it comes on or goes out); the distance from one app's centre
+/// to the next; and its look.
 class Glow {
   const Glow(this.at, this.heat, this.step, this.look);
 
@@ -254,11 +254,13 @@ class _Light extends CustomPainter {
     final r = corners.topLeft.x * GlowLook.lampScale;
     final centre = (index - glow.at) * glow.step;
     final half = size.width * scale / 2;
-    final (cr, cg, cb) = GlowLook.colour(glow.heat);
+    // As the glow behind it: drawn at the heat of focus, then faded with the heat.
+    final (cr, cg, cb) = GlowLook.colour(1);
+    final (fr, fg, fb) = GlowLook.fade(glow.heat);
     Color caught(double dx) {
-      final light = GlowLook.rim * glow.heat * glow.look.light(dx, 0, hw, hh, r);
-      int channel(double c) => (255 * GlowLook.tone(light * c)).round();
-      return Color.fromARGB(255, channel(cr), channel(cg), channel(cb));
+      final light = GlowLook.rim * glow.look.light(dx, 0, hw, hh, r);
+      int channel(double c, double f) => (255 * math.min(GlowLook.tone(light * c) * f, 1.0)).round();
+      return Color.fromARGB(255, channel(cr, fr), channel(cg, fg), channel(cb, fb));
     }
 
     _outline(

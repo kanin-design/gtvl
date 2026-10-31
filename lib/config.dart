@@ -46,7 +46,7 @@ class Config extends ChangeNotifier {
       dockNames = v.get('dockNames'),
       tileShape = v.get('tileShape'),
       dockAlign = v.get('dockAlign'),
-      glow = v.get('glow'),
+      dockGlow = v.get('dockGlow'),
       remotes = v.map('remotes'),
       showsOff = {...v.strings('showsOff')},
       autoUpdate = v.get('autoUpdate');
@@ -132,9 +132,9 @@ class Config extends ChangeNotifier {
   /// (equal gaps, ends too) or between (first and last at the edges).
   String dockAlign;
 
-  /// How strongly the glass glows behind the dock app in focus: a step of
-  /// GlowLook.steps, 0 the faintest.
-  int glow;
+  /// How strongly the glass glows behind the dock app in focus: 0 for no
+  /// glow, else a level of GlowLook.steps from 1, the faintest.
+  int dockGlow;
 
   /// What the remote's buttons do instead, by remote (see Remaps).
   final Map<String, Object?> remotes;
@@ -198,7 +198,7 @@ class Config extends ChangeNotifier {
     'dockNames': dockNames,
     'tileShape': tileShape,
     'dockAlign': dockAlign,
-    'glow': glow,
+    'dockGlow': dockGlow,
     'remotes': remotes,
     'showsOff': showsOff.toList(),
     'autoUpdate': autoUpdate,

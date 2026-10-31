@@ -20,6 +20,25 @@ fake in the app that looks like it.
   user's latest try after 4 and 2 felt too much). GlowLook.steps in lib/glow.dart holds all
   seven fits (step 0 from looks/m1-fake.json, step k from looks/m1-k-fake.json); refit a step
   by running fit.py on its look and copying the numbers over.
+- Drawn once (2026-10-31, for slow TVs): the shader no longer runs every frame. GlowSprite
+  (lib/glow.dart) draws one lamp's light into images when the dock or the setting changes:
+  the glass at the heat of focus, flared (OK held), softened by a 10 dp blur for embers, and
+  the wallpaper's light at half the pixels. Each frame only places them with plus blending,
+  dimmed and reddened by GlowLook.fade (heat^1.45, ^2.5, ^3.2 per channel, the first molten
+  glow's cooling). Against the per-frame shader: a quarter of a level apart on average.
+- The setting, for now (the user, 2026-10-31): Off, 1, 2, 3 (Config.dockGlow, default 2).
+  Levels 1 to 3 are the old steps 0 to 2 (M1, M1 + K0 x0.069, M1 + K0 x0.164); the brighter
+  steps' fits stay in looks/ but not in the app. Off draws no glow, and the dock's apps take
+  focus as they do elsewhere (shadow and sheen).
+- No flow (the user, 2026-10-31: "it should just pop up behind the selected card, as if a
+  bulb was lit, then fade out fast behind the last one"). _Molten lights a lamp behind the new
+  app from dark (rate 25/s: full in about 80 ms, up through red) and leaves the old one going
+  out where it was (rate 8/s, gone in about 250 ms), softening as it dims. Same when focus
+  leaves the dock. Shield: out/shield-bulb.png; moves still at 60 fps.
+- The fade, put back: embers had been drawn as the full lamp, so a crisp ring stayed round
+  the app left behind, and luminance-normalised blackbody colours kept the cooling glow
+  bright red. Now an ember is soft warm glass, gone within about 200 ms of a move
+  (out/shield-fade.png, frames from the Shield).
 - On the Shield (2026-10-31): the build with the setting, at step 1. Each focus move still
   plays as 50 unbroken frames at 60 fps (measure.sh); between moves the video's own 30 fps.
 - The user tried step 4 on the emulator (AVD shieldtv) and found it too bright, then step 2. Step 4 was drawn correctly: beside the app, the

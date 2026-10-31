@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show Icons;
@@ -436,9 +435,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (glowing >= 0) _molten.focus(glowing);
     final names = c.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, step) = _centres(g, apps.length, c.dockAlign);
-    _molten
-      ..step = step
-      ..look = GlowLook.at(c.glow);
+    // With the glow off, the apps take focus as they do elsewhere.
+    final look = GlowLook.of(c.dockGlow);
+    _molten.step = step;
+    if (look != null) _molten.look = look;
     return FocusScope(
       node: _dock,
       onKeyEvent: _onDockKey,
@@ -475,13 +475,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       constraints: BoxConstraints(minWidth: g.width - 2 * g.pad + g.gap),
                       // The glow, behind the apps and moving along with them.
                       child: CustomPaint(
-                        painter: _MoltenPainter(
-                          _molten,
-                          first: first,
-                          tile: Size(g.tileWidth, g.tileHeight),
-                          radius: g.radius,
-                          raise: names / 2,
-                        ),
+                        painter: look == null
+                            ? null
+                            : _MoltenPainter(
+                                _molten,
+                                first: first,
+                                tile: Size(g.tileWidth, g.tileHeight),
+                                radius: g.radius,
+                                raise: names / 2,
+                                ratio: MediaQuery.devicePixelRatioOf(context),
+                              ),
                         child: Row(
                           mainAxisAlignment: _arrangements[c.dockAlign] ?? MainAxisAlignment.start,
                           children: [
@@ -502,9 +505,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     onKey: _moving == apps[i].package ? _onMoveKey : null,
                                     onLaunch: () => _launch(apps[i]),
                                     onMenu: () => _menu(apps[i]),
-                                    glow: _molten,
+                                    glow: look == null ? null : _molten,
                                     index: i,
-                                    onDown: _molten.press,
+                                    onDown: look == null ? null : _molten.press,
                                     onFocusChange: (focused) {
                                       if (!focused) return;
                                       _glowing = apps[i].package;
@@ -543,6 +546,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   /// The light the dock's lamp throws on the wallpaper round it, [fade]d as the dock slides away.
   Widget _bleed(_Geometry g, double fade) {
+    if (GlowLook.of(s.config.dockGlow) == null) return const SizedBox.shrink();
     final apps = s.apps.dock;
     final names = s.config.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, _) = _centres(g, apps.length, s.config.dockAlign);
@@ -557,6 +561,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         raise: names / 2,
         room: _bleedRoom,
         fade: fade,
+        ratio: MediaQuery.devicePixelRatioOf(context),
       ),
     );
   }
@@ -893,10 +898,11 @@ class _BandLight extends CustomPainter {
   bool shouldRepaint(_BandLight old) => old.line != line || old.alpha != alpha;
 }
 
-/// The dock's light: a hot glow in the glass behind the app in focus. It
-/// flows after focus to the next app, leaves an ember where it was that cools
-/// to red as it fades, and cools away when focus leaves the dock. It ticks
-/// only while something changes.
+/// The dock's light: a lamp in the glass behind the app in focus. It comes
+/// on behind an app as focus reaches it, as a bulb does, up through red in
+/// a blink; the one behind the app focus left goes out fast where it was,
+/// an ember, as the lamp does when focus leaves the dock. It ticks only
+/// while something changes.
 class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   _Molten(TickerProvider vsync) {
     _ticker = vsync.createTicker(_tick);
@@ -904,12 +910,12 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
 
   late final Ticker _ticker;
   Duration? _last;
-  double _at = 0, _to = 0, _heat = 0, _hot = 0;
+  double _at = 0, _heat = 0, _hot = 0;
 
-  /// How fast the glow flows, in apps a second.
-  double speed = 0;
+  /// How fast a lamp comes on, and goes out (each an exponential rate, a second).
+  static const _on = 25.0, _out = 8.0;
 
-  /// Embers left where the glow was, as (place, heat).
+  /// Lamps going out where focus was, as (place, heat).
   final embers = <(double, double)>[];
 
   @override
@@ -935,17 +941,16 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   /// Focus is on the dock app at [index], or has left the dock (null).
   void focus(int? index) {
     final hot = index == null ? 0.0 : 1.0;
-    final to = index?.toDouble() ?? _to;
-    if (to == _to && hot == _hot) return;
-    if (index != null) {
-      if (_heat < 0.05) {
-        // Cold: it lights up where focus is, rather than flowing there.
-        _at = to;
-      } else if ((to - _to).abs() > 0.5) {
-        embers.add((_at, _heat * 0.85));
+    final at = index?.toDouble() ?? _at;
+    if (at == _at && hot == _hot) return;
+    if (at != _at) {
+      // The lamp behind the app left goes out there; the new app's comes on from dark.
+      if (_heat > 0.02) {
+        embers.add((_at, _heat));
         if (embers.length > 3) embers.removeAt(0);
       }
-      _to = to;
+      _at = at;
+      _heat = 0;
     }
     _hot = hot;
     _start();
@@ -960,51 +965,52 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   void _tick(Duration now) {
     final dt = _last == null ? 1 / 60 : (now - _last!).inMicroseconds / 1e6;
     _last = now;
-    final was = _at;
-    _at += (_to - _at) * (1 - math.exp(-dt * 16));
-    speed = dt > 0 ? (_at - was) / dt : 0;
-    // Heats quickly, cools slowly.
-    _heat += (_hot - _heat) * (1 - math.exp(-dt * (_hot > _heat ? 12 : 3.5)));
+    _heat += (_hot - _heat) * (1 - math.exp(-dt * (_hot > _heat ? _on : _out)));
     for (var i = embers.length - 1; i >= 0; i--) {
       final (at, heat) = embers[i];
-      final cooler = heat * math.exp(-dt * 4.5);
-      if (cooler < 0.02) {
+      final cooler = heat * math.exp(-dt * _out);
+      if (cooler < 0.01) {
         embers.removeAt(i);
       } else {
         embers[i] = (at, cooler);
       }
     }
-    if ((_to - _at).abs() < 0.001 && (_hot - _heat).abs() < 0.002 && embers.isEmpty) {
-      _at = _to;
+    if ((_hot - _heat).abs() < 0.002 && embers.isEmpty) {
       _heat = _hot;
-      speed = 0;
       _ticker.stop();
     }
     notifyListeners();
   }
 
-  /// The shaders drawing it in the glass and on the wallpaper, once loaded.
-  ui.FragmentShader? _glass, _wallpaper;
+  /// Its light in the glass and on the wallpaper, drawn once for the dock
+  /// as it is (see GlowSprite), and again only when that changes.
+  GlowSprite? _glass, _wall;
 
-  ui.FragmentShader? shader({required bool wallpaper}) =>
-      wallpaper ? _wallpaper ??= GlowShader.create() : _glass ??= GlowShader.create();
+  GlowSprite? glass(GlowKey key) => _glass = _sprite(_glass, key);
+  GlowSprite? wall(GlowKey key) => _wall = _sprite(_wall, key);
+
+  static GlowSprite? _sprite(GlowSprite? sprite, GlowKey key) {
+    if (sprite != null && sprite.key == key) return sprite;
+    sprite?.dispose();
+    return GlowSprite.draw(key);
+  }
 
   /// The distance from one app's centre to the next, set as the dock lays out.
   double step = 0;
 
   /// The lamps to draw, the one in focus first, along a row whose first app
-  /// is centred at [first]: each its centre, heat and stretch.
+  /// is centred at [first]: each its centre and heat, and whether it is going
+  /// out.
   List<Spot> spots(double first, double offset) => [
-    if (value case final glow?)
-      (x: offset + first + glow.at * step, heat: glow.heat, stretch: 1 + 0.35 * (speed.abs() / 10).clamp(0.0, 1.0)),
-    for (final (at, heat) in embers.take(3)) (x: offset + first + at * step, heat: heat, stretch: 1.0),
+    if (value case final glow?) (x: offset + first + glow.at * step, heat: glow.heat, ember: false),
+    for (final (at, heat) in embers) (x: offset + first + at * step, heat: heat, ember: true),
   ];
 
   @override
   void dispose() {
     _ticker.dispose();
     _glass?.dispose();
-    _wallpaper?.dispose();
+    _wall?.dispose();
     super.dispose();
   }
 }
@@ -1013,8 +1019,14 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
 /// them: a lamp behind the frosted glass under the app in focus, and its
 /// embers (see glow.dart). The band fills the painter's height.
 class _MoltenPainter extends CustomPainter {
-  _MoltenPainter(this.light, {required this.first, required this.tile, required this.radius, required this.raise})
-    : super(repaint: light);
+  _MoltenPainter(
+    this.light, {
+    required this.first,
+    required this.tile,
+    required this.radius,
+    required this.raise,
+    required this.ratio,
+  }) : super(repaint: light);
 
   final _Molten light;
 
@@ -1026,38 +1038,38 @@ class _MoltenPainter extends CustomPainter {
   /// How far above the middle the tiles sit, making room for names.
   final double raise;
 
+  /// The screen's pixels to a dp, for the glow's images.
+  final double ratio;
+
   @override
   void paint(Canvas canvas, Size size) {
     final spots = light.spots(first, 0);
-    final shader = spots.isEmpty ? null : light.shader(wallpaper: false);
-    if (shader == null) return;
-    setGlow(
-      shader,
-      size,
+    if (spots.isEmpty) return;
+    final sprite = light.glass((
       look: light.look,
-      y: size.height / 2 - raise,
       hw: tile.width * GlowLook.lampScale / 2,
       hh: tile.height * GlowLook.lampScale / 2,
       r: radius * GlowLook.lampScale,
+      height: size.height,
+      y: size.height / 2 - raise,
       top: 0,
       bottom: size.height,
-      spots: spots,
-    );
-    // Past the row's ends too: into the dock's margins, and as far as it scrolls.
-    canvas.drawRect(
-      Rect.fromLTRB(-_reach, 0, size.width + _reach, size.height),
-      Paint()
-        ..shader = shader
-        ..blendMode = BlendMode.plus,
-    );
+      wallpaper: false,
+      ratio: ratio,
+    ));
+    for (final spot in spots) {
+      sprite?.place(canvas, spot.x, 0, heat: spot.heat, ember: spot.ember);
+    }
   }
-
-  /// How far past the row's ends the glow is drawn (dp).
-  static const _reach = 1000.0;
 
   @override
   bool shouldRepaint(_MoltenPainter old) =>
-      old.light != light || old.first != first || old.tile != tile || old.radius != radius || old.raise != raise;
+      old.light != light ||
+      old.first != first ||
+      old.tile != tile ||
+      old.radius != radius ||
+      old.raise != raise ||
+      old.ratio != ratio;
 }
 
 /// Paints the light the dock's lamp throws on the wallpaper above and below
@@ -1075,6 +1087,7 @@ class _BleedPainter extends CustomPainter {
     required this.raise,
     required this.room,
     required this.fade,
+    required this.ratio,
   }) : super(repaint: Listenable.merge([light, scroll]));
 
   final _Molten light;
@@ -1085,32 +1098,30 @@ class _BleedPainter extends CustomPainter {
   final Size tile;
   final double radius, raise, room, fade;
 
+  /// The screen's pixels to a dp; the wallpaper's light, being soft, is
+  /// drawn at half of them (fewer blur its sharp edge at the dock's).
+  final double ratio;
+
   @override
   void paint(Canvas canvas, Size size) {
     if (fade <= 0) return;
-    final offset = left - (scroll.hasClients ? scroll.offset : 0);
-    final spots = [for (final s in light.spots(first, offset)) (x: s.x, heat: s.heat * fade, stretch: s.stretch)];
-    final shader = spots.isEmpty ? null : light.shader(wallpaper: true);
-    if (shader == null) return;
-    setGlow(
-      shader,
-      size,
+    final spots = light.spots(first, left - (scroll.hasClients ? scroll.offset : 0));
+    if (spots.isEmpty) return;
+    final sprite = light.wall((
       look: light.look,
-      y: size.height / 2 - raise,
       hw: tile.width * GlowLook.lampScale / 2,
       hh: tile.height * GlowLook.lampScale / 2,
       r: radius * GlowLook.lampScale,
+      height: size.height,
+      y: size.height / 2 - raise,
       top: room,
       bottom: size.height - room,
-      spots: spots,
       wallpaper: true,
-    );
-    canvas.drawRect(
-      Offset.zero & size,
-      Paint()
-        ..shader = shader
-        ..blendMode = BlendMode.plus,
-    );
+      ratio: ratio / 2,
+    ));
+    for (final spot in spots) {
+      sprite?.place(canvas, spot.x, 0, heat: spot.heat, ember: spot.ember, opacity: fade);
+    }
   }
 
   @override
@@ -1123,5 +1134,6 @@ class _BleedPainter extends CustomPainter {
       old.radius != radius ||
       old.raise != raise ||
       old.room != room ||
-      old.fade != fade;
+      old.fade != fade ||
+      old.ratio != ratio;
 }

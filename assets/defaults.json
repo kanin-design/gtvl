@@ -41,7 +41,7 @@
   "dockNames": false,
   "tileShape": "square",
   "dockAlign": "start",
-  "glow": 1,
+  "dockGlow": 2,
   "remotes": {},
   "showsOff": [],
   "autoUpdate": true
