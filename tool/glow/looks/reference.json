@@ -1,0 +1,29 @@
+{
+ "about": "The dock's glow reference: guide.py's light behind the foil (A6) plus half of its light pressed into the glass (C1), lit together by both.py, on a frame of the Arc fold video at 6.5 s with HBO Max in focus.",
+ "command": "python3 both.py base.json first.json second.json 0.5 out/reference.png",
+ "base": {
+  "ppd": 2.0
+ },
+ "first": {
+  "light_mode": "behind",
+  "rays": 6000000,
+  "light_gap": 45,
+  "light_soft": 6,
+  "light_radiance": 1.4,
+  "light_scale": 1.2,
+  "wall_gap": 100
+ },
+ "second": {
+  "light_mode": "inject",
+  "rays": 3000000,
+  "glass_mfp": 600,
+  "light_radiance": 1.0,
+  "light_scale": 1.12,
+  "foil_gap": 24,
+  "light_back": 1.5,
+  "foil_front_reflect": 0.45,
+  "edge_scatter": 0.45,
+  "wall_gap": 100
+ },
+ "share": 0.5
+}

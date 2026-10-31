@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'apps.dart';
+import 'glow.dart';
 import 'menu.dart';
 import 'native.dart';
 import 'services.dart';
@@ -83,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final _dock = FocusScopeNode(debugLabel: 'dock');
   final _grid = FocusScopeNode(debugLabel: 'grid');
   final _gridScroll = ScrollController();
+  final _dockScroll = ScrollController();
   final _bar = FocusScopeNode(debugLabel: 'bar');
 
   /// The top bar is on screen: while it has focus.
@@ -99,6 +101,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    // The glow's shader: until it loads, the dock simply has no glow.
+    GlowShader.load().then((_) {
+      if (mounted) setState(() {});
+    });
     // Home pressed while already home: close menus, back to the dock.
     _homeKey = Native.events.where((event) => event['type'] == 'home').listen((_) => _goHome(closeMenus: true));
     // A remapped button asking for settings or all apps.
@@ -123,6 +129,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _dock.dispose();
     _grid.dispose();
     _gridScroll.dispose();
+    _dockScroll.dispose();
     _bar.dispose();
     _barShown.dispose();
     _molten.dispose();
@@ -348,13 +355,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     Positioned(
                       left: 0,
                       right: 0,
-                      top: g.dockIdle,
-                      height: g.dockHeight,
+                      top: g.dockIdle - _bleedRoom,
+                      height: g.dockHeight + 2 * _bleedRoom,
                       child: AnimatedBuilder(
                         animation: eased,
                         child: RepaintBoundary(child: _dockBar(g)),
-                        builder: (context, dock) =>
-                            Transform.translate(offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)), child: dock),
+                        builder: (context, dock) => Transform.translate(
+                          offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)),
+                          child: Stack(
+                            children: [
+                              Positioned.fill(child: RepaintBoundary(child: _bleed(g, 1 - eased.value))),
+                              Positioned(left: 0, right: 0, top: _bleedRoom, height: g.dockHeight, child: dock!),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                     Positioned(
@@ -422,6 +436,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (glowing >= 0) _molten.focus(glowing);
     final names = c.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, step) = _centres(g, apps.length, c.dockAlign);
+    _molten
+      ..step = step
+      ..look = GlowLook.at(c.glow);
     return FocusScope(
       node: _dock,
       onKeyEvent: _onDockKey,
@@ -449,6 +466,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               : FocusTraversalGroup(
                   policy: smoothTraversal,
                   child: SingleChildScrollView(
+                    controller: _dockScroll,
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
                     padding: EdgeInsets.symmetric(horizontal: g.pad - g.gap / 2),
@@ -460,11 +478,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         painter: _MoltenPainter(
                           _molten,
                           first: first,
-                          step: step,
                           tile: Size(g.tileWidth, g.tileHeight),
                           radius: g.radius,
                           raise: names / 2,
-                          ratio: MediaQuery.devicePixelRatioOf(context),
                         ),
                         child: Row(
                           mainAxisAlignment: _arrangements[c.dockAlign] ?? MainAxisAlignment.start,
@@ -520,6 +536,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       'between' when count > 1 => (cell / 2, cell + free / (count - 1)),
       _ => (cell / 2, cell),
     };
+  }
+
+  /// Room above and below the dock for the light its lamp throws on the wallpaper.
+  static const _bleedRoom = 120.0;
+
+  /// The light the dock's lamp throws on the wallpaper round it, [fade]d as the dock slides away.
+  Widget _bleed(_Geometry g, double fade) {
+    final apps = s.apps.dock;
+    final names = s.config.dockNames ? _Geometry.labelHeight : 0.0;
+    final (first, _) = _centres(g, apps.length, s.config.dockAlign);
+    return CustomPaint(
+      painter: _BleedPainter(
+        _molten,
+        _dockScroll,
+        left: g.pad - g.gap / 2,
+        first: first,
+        tile: Size(g.tileWidth, g.tileHeight),
+        radius: g.radius,
+        raise: names / 2,
+        room: _bleedRoom,
+        fade: fade,
+      ),
+    );
   }
 
   /// How the dock spreads apps that fit, by its "arrange" setting.
@@ -874,7 +913,17 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   final embers = <(double, double)>[];
 
   @override
-  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat);
+  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat, step, _look);
+
+  /// The look it is drawn in (the glow setting's step), set as the dock lays out.
+  GlowLook get look => _look;
+  GlowLook _look = GlowLook.steps.first;
+  set look(GlowLook look) {
+    if (look == _look) return;
+    _look = look;
+    // A tick shows it, on the tiles' edges too.
+    _start();
+  }
 
   /// OK is down on the app in focus: the glow flares while it is.
   void press(bool down) {
@@ -934,240 +983,145 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
     notifyListeners();
   }
 
-  /// The halo round the lifted app, blurred once for its size (see [_Halo]).
-  _Halo? _halo;
+  /// The shaders drawing it in the glass and on the wallpaper, once loaded.
+  ui.FragmentShader? _glass, _wallpaper;
 
-  _Halo halo(Size tile, double radius, double ratio) {
-    if (_halo case final halo? when halo.tile == tile && halo.radius == radius && halo.ratio == ratio) return halo;
-    _halo?.dispose();
-    return _halo = _Halo(tile, radius, ratio);
-  }
+  ui.FragmentShader? shader({required bool wallpaper}) =>
+      wallpaper ? _wallpaper ??= GlowShader.create() : _glass ??= GlowShader.create();
+
+  /// The distance from one app's centre to the next, set as the dock lays out.
+  double step = 0;
+
+  /// The lamps to draw, the one in focus first, along a row whose first app
+  /// is centred at [first]: each its centre, heat and stretch.
+  List<Spot> spots(double first, double offset) => [
+    if (value case final glow?)
+      (x: offset + first + glow.at * step, heat: glow.heat, stretch: 1 + 0.35 * (speed.abs() / 10).clamp(0.0, 1.0)),
+    for (final (at, heat) in embers.take(3)) (x: offset + first + at * step, heat: heat, stretch: 1.0),
+  ];
 
   @override
   void dispose() {
     _ticker.dispose();
-    _halo?.dispose();
+    _glass?.dispose();
+    _wallpaper?.dispose();
     super.dispose();
   }
 }
 
-/// The halo round a lifted app of one size: light bleeding round its edges,
-/// a wide orange glow and a tight white-hot one, blurred once into images in
-/// the colours of a full glow, which the painter fades with the heat.
-/// Blurring it afresh on every frame cost a TV's GPU more than all the rest
-/// of the dock together.
-class _Halo {
-  _Halo(this.tile, this.radius, this.ratio)
-    : layers = [
-        for (final (grow, blur, depth, opacity) in _layers)
-          _blurred(tile, radius, ratio, grow, blur, molten(1, depth: depth, opacity: opacity)),
-      ];
-
-  /// Each layer: how far it reaches past the lifted tile, its blur, and its
-  /// colour, as [molten]'s depth and opacity.
-  static const _layers = [(12.0, 24.0, 0.45, 0.7), (3.0, 7.0, 0.08, 0.9)];
-
-  final Size tile;
-  final double radius, ratio;
-  final List<ui.Image> layers;
-
-  /// A rounded rectangle of [colour], [grow] larger than the lifted tile,
-  /// blurred by [blur], centred in an image with room for the blur, at the
-  /// screen's [ratio] of pixels.
-  static ui.Image _blurred(Size tile, double radius, double ratio, double grow, double blur, Color colour) {
-    final lifted = Size(tile.width * 1.12, tile.height * 1.12);
-    final margin = grow + blur * 3;
-    final size = Size(lifted.width + 2 * margin, lifted.height + 2 * margin);
-    final recorder = ui.PictureRecorder();
-    Canvas(recorder)
-      ..scale(ratio)
-      ..drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(
-            center: size.center(Offset.zero),
-            width: lifted.width + 2 * grow,
-            height: lifted.height + 2 * grow,
-          ),
-          Radius.circular(radius * 1.12 + grow),
-        ),
-        Paint()
-          ..color = colour
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur),
-      );
-    final picture = recorder.endRecording();
-    final image = picture.toImageSync((size.width * ratio).ceil(), (size.height * ratio).ceil());
-    picture.dispose();
-    return image;
-  }
-
-  void dispose() {
-    for (final image in layers) {
-      image.dispose();
-    }
-  }
-}
-
 /// Paints the dock's glow in the row of apps' own space, so it scrolls with
-/// them. The glass lights up as if a lamp burned inside it, behind the app in
-/// focus: the frosted glass glows around it, a fine filament of light runs
-/// along the line and shows between the apps, light bleeds round the app's
-/// edges, and the glass's top and bottom edges carry the light furthest.
-/// Embers glow less, and without a filament.
+/// them: a lamp behind the frosted glass under the app in focus, and its
+/// embers (see glow.dart). The band fills the painter's height.
 class _MoltenPainter extends CustomPainter {
-  _MoltenPainter(
-    this.light, {
-    required this.first,
-    required this.step,
-    required this.tile,
-    required this.radius,
-    required this.raise,
-    required this.ratio,
-  }) : super(repaint: light);
+  _MoltenPainter(this.light, {required this.first, required this.tile, required this.radius, required this.raise})
+    : super(repaint: light);
 
   final _Molten light;
 
-  /// The first app's centre, and the distance from one app's to the next.
-  final double first, step;
+  /// The first app's centre, the apps' tile size and corner radius.
+  final double first;
   final Size tile;
   final double radius;
 
   /// How far above the middle the tiles sit, making room for names.
   final double raise;
 
-  /// The screen's pixels to a logical one, for the halo's images.
-  final double ratio;
-
-  static const _none = Color(0x00000000);
-
   @override
   void paint(Canvas canvas, Size size) {
-    for (final (at, heat) in light.embers) {
-      _spot(canvas, size, first + at * step, heat, 1, ember: true);
-    }
-    if (light.value case final glow?) {
-      final stretch = 1 + 0.35 * (light.speed.abs() / 10).clamp(0.0, 1.0);
-      _spot(canvas, size, first + glow.at * step, glow.heat, stretch);
-    }
-  }
-
-  /// The light at [x]: an [ember] is only the glass still warm, with no
-  /// filament and no halo round the app.
-  void _spot(Canvas canvas, Size size, double x, double heat, double stretch, {bool ember = false}) {
-    final centre = Offset(x, size.height / 2 - raise);
-    final glass = size.height;
-    // The frosted glass lit from within: brightest round the app, and
-    // carried a long way along the line.
-    _pool(
-      canvas,
-      centre,
-      tile.width * 4.2 * stretch,
-      glass,
-      [
-        molten(heat, depth: 0.3, opacity: 0.55 * heat),
-        molten(heat, depth: 0.6, opacity: 0.3 * heat),
-        molten(heat, depth: 0.9, opacity: 0.09 * heat),
-        _none,
-      ],
-      const [0, 0.22, 0.55, 1],
+    final spots = light.spots(first, 0);
+    final shader = spots.isEmpty ? null : light.shader(wallpaper: false);
+    if (shader == null) return;
+    setGlow(
+      shader,
+      size,
+      look: light.look,
+      y: size.height / 2 - raise,
+      hw: tile.width * GlowLook.lampScale / 2,
+      hh: tile.height * GlowLook.lampScale / 2,
+      r: radius * GlowLook.lampScale,
+      top: 0,
+      bottom: size.height,
+      spots: spots,
     );
-    if (!ember) {
-      // Light bleeding round the app's edges: a wide orange glow, then a
-      // tight one, white-hot, just past the lifted tile, drawn out a little
-      // the way it flows. Each is one image, faded with the heat.
-      final faded = Paint()
-        ..color = Color.fromRGBO(0, 0, 0, heat.clamp(0.0, 1.0))
-        ..blendMode = BlendMode.plus
-        ..filterQuality = FilterQuality.low;
-      for (final image in light.halo(tile, radius, ratio).layers) {
-        canvas.drawImageRect(
-          image,
-          Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
-          Rect.fromCenter(
-            center: centre,
-            width: image.width / ratio + tile.width * 1.12 * (stretch - 1),
-            height: image.height / ratio,
-          ),
-          faded,
-        );
-      }
-    }
-    if (!ember) {
-      // A fine filament of light through the glass, level with the apps'
-      // middles: it shows in the gaps between them, fading along the line.
-      for (final (high, depth, opacity) in [(7.0, 0.5, 0.4), (1.6, 0.05, 0.8)]) {
-        _pool(
-          canvas,
-          centre,
-          tile.width * 4.5 * stretch,
-          high,
-          [
-            molten(heat, depth: depth, opacity: opacity * heat),
-            molten(heat, depth: depth + 0.4, opacity: 0.3 * opacity * heat),
-            _none,
-          ],
-          const [0, 0.35, 1],
-        );
-      }
-    }
-    // The glass's edges carry the light furthest, the top more than the
-    // bottom: hottest right over the app, then a long tail along the line.
-    for (final (y, strength) in [(1.0, 1.0), (glass - 1, 0.75)]) {
-      final line = Rect.fromCenter(center: Offset(x, y), width: tile.width * 10, height: 2);
-      final tail = molten(heat, depth: 0.75, opacity: 0.3 * heat * strength);
-      canvas.drawRect(
-        line,
-        Paint()
-          ..blendMode = BlendMode.plus
-          ..shader = LinearGradient(
-            colors: [
-              _none,
-              tail,
-              molten(heat, depth: 0.12, opacity: heat * strength),
-              tail,
-              _none,
-            ],
-            stops: const [0, 0.36, 0.5, 0.64, 1],
-          ).createShader(line),
-      );
-    }
+    // Past the row's ends too: into the dock's margins, and as far as it scrolls.
+    canvas.drawRect(
+      Rect.fromLTRB(-_reach, 0, size.width + _reach, size.height),
+      Paint()
+        ..shader = shader
+        ..blendMode = BlendMode.plus,
+    );
   }
 
-  /// A soft oval of light, [across] wide and [high] tall from its centre,
-  /// [colours] running from the centre outward, added to the glass. Only
-  /// gradients and the rounded rectangles' own fast blur draw the glow, as a
-  /// TV under a moving wallpaper redraws it every frame.
-  static void _pool(
-    Canvas canvas,
-    Offset centre,
-    double across,
-    double high,
-    List<Color> colours, [
-    List<double>? stops,
-  ]) {
-    canvas
-      ..save()
-      ..translate(centre.dx, centre.dy)
-      ..scale(across / high, 1)
-      ..drawCircle(
-        Offset.zero,
-        high,
-        Paint()
-          ..blendMode = BlendMode.plus
-          ..shader = RadialGradient(
-            colors: colours,
-            stops: stops,
-          ).createShader(Rect.fromCircle(center: Offset.zero, radius: high)),
-      )
-      ..restore();
-  }
+  /// How far past the row's ends the glow is drawn (dp).
+  static const _reach = 1000.0;
 
   @override
   bool shouldRepaint(_MoltenPainter old) =>
+      old.light != light || old.first != first || old.tile != tile || old.radius != radius || old.raise != raise;
+}
+
+/// Paints the light the dock's lamp throws on the wallpaper above and below
+/// it, under the dock (whose glass softens what of it lies behind), following
+/// the dock's apps as they scroll. [room] is the room above and below the
+/// band; [fade] dims it as the dock slides away.
+class _BleedPainter extends CustomPainter {
+  _BleedPainter(
+    this.light,
+    this.scroll, {
+    required this.left,
+    required this.first,
+    required this.tile,
+    required this.radius,
+    required this.raise,
+    required this.room,
+    required this.fade,
+  }) : super(repaint: Listenable.merge([light, scroll]));
+
+  final _Molten light;
+  final ScrollController scroll;
+
+  /// Where the row of apps starts, and its first app's centre in it.
+  final double left, first;
+  final Size tile;
+  final double radius, raise, room, fade;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (fade <= 0) return;
+    final offset = left - (scroll.hasClients ? scroll.offset : 0);
+    final spots = [for (final s in light.spots(first, offset)) (x: s.x, heat: s.heat * fade, stretch: s.stretch)];
+    final shader = spots.isEmpty ? null : light.shader(wallpaper: true);
+    if (shader == null) return;
+    setGlow(
+      shader,
+      size,
+      look: light.look,
+      y: size.height / 2 - raise,
+      hw: tile.width * GlowLook.lampScale / 2,
+      hh: tile.height * GlowLook.lampScale / 2,
+      r: radius * GlowLook.lampScale,
+      top: room,
+      bottom: size.height - room,
+      spots: spots,
+      wallpaper: true,
+    );
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = shader
+        ..blendMode = BlendMode.plus,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_BleedPainter old) =>
       old.light != light ||
+      old.scroll != scroll ||
+      old.left != left ||
       old.first != first ||
-      old.step != step ||
       old.tile != tile ||
       old.radius != radius ||
       old.raise != raise ||
-      old.ratio != ratio;
+      old.room != room ||
+      old.fade != fade;
 }

@@ -1,0 +1,10 @@
+{
+ "wallpaper": "/Users/stian/dev/GTVL/tool/glow/out/wallpaper.png",
+ "tiles": "/Users/stian/dev/GTVL/tool/glow/out",
+ "ppd": 1.0,
+ "rays": 2000000,
+ "light_mode": "inject",
+ "glass_mfp": 300,
+ "light_radiance": 1.0,
+ "light_scale": 1.12
+}

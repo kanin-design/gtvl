@@ -46,3 +46,6 @@ app.*.map.json
 
 # Release APKs from tool/build.sh
 /dist/
+
+# Renders made by tool/glow, kept out of git.
+tool/glow/out/

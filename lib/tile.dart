@@ -7,32 +7,25 @@ import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:flutter/widgets.dart';
 
 import 'apps.dart';
+import 'glow.dart';
 import 'ui.dart';
 
-/// The dock's light, as a tile sees it: where the hot glow in the glass is,
-/// by tile index (between two while it flows to the next), and how hot it
-/// is, from 0 to 1.
+/// The dock's light, as a tile sees it: where the lamp behind the glass is,
+/// by tile index (between two while it flows to the next), how hot it is
+/// (1 in focus, more while it flares), and the distance from one app's centre
+/// to the next.
 class Glow {
-  const Glow(this.at, this.heat);
+  const Glow(this.at, this.heat, this.step, this.look);
 
-  final double at, heat;
-
-  @override
-  bool operator ==(Object other) => other is Glow && other.at == at && other.heat == heat;
+  final double at, heat, step;
+  final GlowLook look;
 
   @override
-  int get hashCode => Object.hash(at, heat);
-}
+  bool operator ==(Object other) =>
+      other is Glow && other.at == at && other.heat == heat && other.step == step && other.look == look;
 
-/// The colour of glass glowing at [heat] (0 to 1, more while it flares):
-/// white-hot, through orange, to a dull red as it cools. [depth] runs the
-/// same way, from the glow's core (0) out to its faint edge (1). [opacity]
-/// is kept between 0 and 1.
-Color molten(double heat, {double depth = 0, double opacity = 1}) {
-  const colours = [Color(0xFF3A0602), Color(0xFF9A1C06), Color(0xFFE2501A), Color(0xFFFFA048), Color(0xFFFFF0D8)];
-  final at = (heat * (1 - 0.7 * depth)).clamp(0.0, 1.0) * (colours.length - 1);
-  final i = at.floor().clamp(0, colours.length - 2);
-  return Color.lerp(colours[i], colours[i + 1], at - i)!.withValues(alpha: opacity.clamp(0.0, 1.0));
+  @override
+  int get hashCode => Object.hash(at, heat, step, look);
 }
 
 /// An app on the home screen: its TV banner, or its icon and name on a card;
@@ -43,9 +36,9 @@ Color molten(double heat, {double depth = 0, double opacity = 1}) {
 /// sheen crosses its face. At rest a faint rim of the same light keeps dark
 /// icons in shape on dark glass. OK sinks it a little. No outline.
 ///
-/// In the dock's glass ([glow]), focus lifts it out of a hot glow instead: no
-/// shadow or sheen, its edges lit from behind, and a tile beside the glow
-/// warmed on the side facing it.
+/// In the dock's glass ([glow]), focus lifts it in front of the lamp glowing
+/// behind the glass instead: no shadow or sheen, and its edge catches the
+/// glow behind it, as every tile's does, most on the side toward the lamp.
 class AppTile extends StatelessWidget {
   const AppTile({
     super.key,
@@ -136,7 +129,14 @@ class AppTile extends StatelessWidget {
           final glow = this.glow;
           // Drawn over the picture, inside the tile.
           Widget lit(Glow? hot) => CustomPaint(
-            foregroundPainter: _Light(corners, glow == null ? lifted : 0, square: square, glow: hot, index: index),
+            foregroundPainter: _Light(
+              corners,
+              glow == null ? lifted : 0,
+              square: square,
+              glow: hot,
+              index: index,
+              scale: 1 + 0.12 * t,
+            ),
             child: picture,
           );
           return Transform.scale(
@@ -192,18 +192,19 @@ class AppTile extends StatelessWidget {
 /// bright in focus, and in focus a soft sheen across its face. [lift] goes
 /// from 0 at rest to 1 in focus.
 ///
-/// With the dock's [glow]: the tile over it has its edges lit from behind,
-/// and one beside it warms on the side facing it, less the further it is.
+/// With the dock's [glow]: its outer dp catches a share of the glass's glow
+/// behind it (see glow.dart), most on the side toward the lamp. [scale] is
+/// how much the tile is enlarged.
 ///
 /// Every shape is drawn as a rounded rectangle or superellipse, never a
 /// path: a TV redraws the dock every frame while its glow moves, and works
 /// out a path's outline afresh each time.
 class _Light extends CustomPainter {
-  _Light(this.corners, this.lift, {required this.square, this.glow, this.index = 0});
+  _Light(this.corners, this.lift, {required this.square, this.glow, this.index = 0, this.scale = 1});
 
   final BorderRadius corners;
   final bool square;
-  final double lift;
+  final double lift, scale;
   final Glow? glow;
   final int index;
 
@@ -246,89 +247,39 @@ class _Light extends CustomPainter {
       );
     }
     final glow = this.glow;
-    if (glow == null || glow.heat < 0.01) return;
-    // How far the glow is, in tiles: over this one at 0, beside it at 1.
-    final away = index - glow.at;
-    final behind = glow.heat * (1 - away.abs() * 2).clamp(0.0, 1.0);
-    if (behind > 0) {
-      // Heat bleeding in from the edges, as if the tile were lit through:
-      // soft light just inside each edge, drawn as gradients within the
-      // tile's outline, with no blur and no clip.
-      final heat = molten(glow.heat, depth: 0.2, opacity: 0.4 * behind);
-      final reach = math.min(size.width, size.height) * 0.16;
-      for (final (begin, end, extent) in [
-        (Alignment.centerLeft, Alignment.centerRight, size.width),
-        (Alignment.centerRight, Alignment.centerLeft, size.width),
-        (Alignment.topCenter, Alignment.bottomCenter, size.height),
-        (Alignment.bottomCenter, Alignment.topCenter, size.height),
-      ]) {
-        _outline(
-          canvas,
-          rect,
-          Paint()
-            ..blendMode = BlendMode.plus
-            ..shader = LinearGradient(
-              begin: begin,
-              end: end,
-              colors: [heat, heat.withValues(alpha: 0)],
-              stops: [0, reach / extent],
-            ).createShader(rect),
-        );
-      }
+    if (glow == null || glow.heat < 0.01 || glow.step <= 0) return;
+    // The lamp is as big as the tile, enlarged as the shader has it; this
+    // tile's centre, and its left and right edges, as offsets from it.
+    final hw = size.width * GlowLook.lampScale / 2, hh = size.height * GlowLook.lampScale / 2;
+    final r = corners.topLeft.x * GlowLook.lampScale;
+    final centre = (index - glow.at) * glow.step;
+    final half = size.width * scale / 2;
+    final (cr, cg, cb) = GlowLook.colour(glow.heat);
+    Color caught(double dx) {
+      final light = GlowLook.rim * glow.heat * glow.look.light(dx, 0, hw, hh, r);
+      int channel(double c) => (255 * GlowLook.tone(light * c)).round();
+      return Color.fromARGB(255, channel(cr), channel(cg), channel(cb));
     }
-    final beside =
-        glow.heat * math.exp(-math.max(away.abs() - 0.5, 0) * 1.4) * ((away.abs() - 0.2) / 0.4).clamp(0.0, 1.0);
-    if (beside > 0.01) {
-      // Lit from the glow's side, fading across the face: drawn over only
-      // the part of the tile the light reaches.
-      final fromLeft = away > 0;
-      final from = fromLeft ? Alignment.centerLeft : Alignment.centerRight;
-      final to = fromLeft ? Alignment.centerRight : Alignment.centerLeft;
-      final reached = fromLeft
-          ? Rect.fromLTWH(0, 0, size.width * 0.55, size.height)
-          : Rect.fromLTWH(size.width * 0.45, 0, size.width * 0.55, size.height);
-      canvas
-        ..save()
-        ..clipRect(reached);
-      _outline(
-        canvas,
-        rect.deflate(0.75),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5
-          ..blendMode = BlendMode.plus
-          ..shader = LinearGradient(
-            begin: from,
-            end: to,
-            colors: [
-              molten(glow.heat, depth: 0.35, opacity: 0.9 * beside),
-              molten(glow.heat, depth: 0.35, opacity: 0),
-            ],
-            stops: const [0, 0.55],
-          ).createShader(rect),
-      );
-      _outline(
-        canvas,
-        rect,
-        Paint()
-          ..blendMode = BlendMode.plus
-          ..shader = LinearGradient(
-            begin: from,
-            end: to,
-            colors: [
-              molten(glow.heat, depth: 0.35, opacity: 0.2 * beside),
-              molten(glow.heat, depth: 0.35, opacity: 0),
-            ],
-            stops: const [0, 0.4],
-          ).createShader(rect),
-      );
-      canvas.restore();
-    }
+
+    _outline(
+      canvas,
+      rect.deflate(0.5),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..blendMode = BlendMode.plus
+        ..shader = LinearGradient(colors: [caught(centre - half), caught(centre + half)]).createShader(rect),
+    );
   }
 
   @override
   bool shouldRepaint(_Light old) =>
-      old.lift != lift || old.corners != corners || old.square != square || old.glow != glow || old.index != index;
+      old.lift != lift ||
+      old.scale != scale ||
+      old.corners != corners ||
+      old.square != square ||
+      old.glow != glow ||
+      old.index != index;
 }
 
 /// A damped spring: quick off the mark, a touch past it, then settled, as a

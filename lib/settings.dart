@@ -67,6 +67,7 @@ const _tints = [
 const _tintStrengths = [(0.0, 'Clear'), (0.05, 'Light'), (0.08, 'Medium'), (0.16, 'Strong'), (0.32, 'Dense')];
 const _lineWidths = [(0.0, 'None'), (1.0, 'Hairline'), (1.5, 'Thin'), (2.5, 'Bold')];
 const _lineBrightness = [(0.06, 'Faint'), (0.12, 'Soft'), (0.24, 'Bright'), (0.45, 'White')];
+const _glows = [(0, '0'), (1, '1'), (2, '2'), (3, '3'), (4, '4'), (5, '5'), (6, '6')];
 const _sceneNames = {'space': 'Space', 'underwater': 'Underwater', 'cities': 'Cities', 'landscapes': 'Landscapes'};
 const _iconNames = {'settings': 'Settings', 'network': 'Network', 'vpn': 'VPN'};
 
@@ -1100,6 +1101,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
           c.dockNames = !c.dockNames;
           c.changed();
         },
+      ),
+      _Row(
+        'Glow',
+        value: _label(_glows, c.glow),
+        chevron: true,
+        onPressed: () => _choose(
+          'Glow',
+          _glows,
+          () => c.glow,
+          (v) => c.glow = v,
+          note: 'How brightly the glass glows behind the app in focus: 0 is the faintest, 6 the brightest.',
+        ),
       ),
       _Row('Glass', chevron: true, onPressed: () => _push(_Page('Glass', _glassRows))),
       const _Note('Size, shape, spacing and corners apply in the dock and in All apps.'),

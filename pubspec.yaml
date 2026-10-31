@@ -20,6 +20,9 @@ dev_dependencies:
 flutter:
   # Icons only; release builds keep just the glyphs in use.
   uses-material-design: true
+  # The dock's glow (lib/glow.dart).
+  shaders:
+    - shaders/glow.frag
   assets:
     - assets/aerials.json
     - assets/defaults.json
