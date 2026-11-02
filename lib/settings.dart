@@ -1287,7 +1287,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
-  /// The faces, with the clock itself under them: settings hide it on the home screen.
+  /// The faces. The clock itself shows beside the panel, in whichever has focus.
   List<Widget> _clockFontRows() {
     final c = s.config;
     return [
@@ -1295,21 +1295,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
         _Row(
           face.label,
           checked: face.id == c.clockFont,
+          onFocused: () => s.clockTrial.value = face.id,
           onPressed: () {
             c.clockFont = face.id;
             c.changed();
           },
         ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(14, 22, 14, 8),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Clock(h24: c.clock24, face: c.clockFont),
-          ),
-        ),
-      ),
     ];
   }
 
@@ -1337,7 +1328,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
         'Clock font',
         value: _short(ClockFace.of(c.clockFont).label),
         chevron: true,
-        onPressed: () => _push(_Page('Clock font', _clockFontRows), focus: ClockFace.of(c.clockFont).label),
+        onPressed: () => _push(
+          _Page('Clock font', _clockFontRows, onClose: () => s.clockTrial.value = null),
+          focus: ClockFace.of(c.clockFont).label,
+        ),
       ),
       _Row(
         '24-hour clock',
@@ -1899,6 +1893,7 @@ class _Row extends StatelessWidget {
     this.onPressed,
     this.onLongPress,
     this.onKey,
+    this.onFocused,
   });
 
   final String label;
@@ -1921,6 +1916,7 @@ class _Row extends StatelessWidget {
   final VoidCallback? onPressed;
   final VoidCallback? onLongPress;
   final KeyEventResult Function(KeyEvent event)? onKey;
+  final VoidCallback? onFocused;
 
   @override
   Widget build(BuildContext context) {
@@ -1929,6 +1925,9 @@ class _Row extends StatelessWidget {
     return Pressable(
       onPressed: enabled ? onPressed : null,
       onLongPress: enabled ? onLongPress : null,
+      onFocusChange: (focused) {
+        if (focused) onFocused?.call();
+      },
       onKey: (event) {
         final custom = onKey?.call(event) ?? KeyEventResult.ignored;
         if (custom != KeyEventResult.ignored) return custom;

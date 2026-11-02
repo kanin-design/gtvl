@@ -512,10 +512,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 width: 480,
                 height: 240,
                 child: IgnorePointer(
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: _barShown,
-                    builder: (context, shown, shade) =>
-                        AnimatedOpacity(opacity: shown ? 1 : 0, duration: Look.medium, child: shade),
+                  child: ListenableBuilder(
+                    listenable: _clockChanges,
+                    builder: (context, shade) =>
+                        AnimatedOpacity(opacity: _clockShown ? 1 : 0, duration: Look.medium, child: shade),
                     child: const DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: RadialGradient(
@@ -773,6 +773,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   /// A top icon's size, the gap between them, and the size of the glyph in one.
   static const _chip = 40.0, _chipGap = 8.0, _glyph = 26.0;
 
+  /// The clock shows with the top bar, and on its own while a face is tried in settings.
+  bool get _clockShown => _barShown.value || s.clockTrial.value != null;
+  late final _clockChanges = Listenable.merge([_barShown, s.clockTrial]);
+
+  /// Fades and slides the top bar's [child] in and out.
+  Widget _appearing(bool shown, Widget? child) => AnimatedOpacity(
+    opacity: shown ? 1 : 0,
+    duration: Look.fast,
+    child: AnimatedSlide(
+      offset: shown ? Offset.zero : const Offset(0, -0.3),
+      duration: Look.medium,
+      curve: Look.ease,
+      child: child,
+    ),
+  );
+
   Widget _topBar() => FocusScope(
     node: _bar,
     onKeyEvent: _onBarKey,
@@ -780,42 +796,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _barShown.value = focused;
       if (focused) _lastScope = _bar;
     },
-    child: ValueListenableBuilder<bool>(
-      valueListenable: _barShown,
-      builder: (context, shown, bar) => AnimatedOpacity(
-        opacity: shown ? 1 : 0,
-        duration: Look.fast,
-        child: AnimatedSlide(
-          offset: shown ? Offset.zero : const Offset(0, -0.3),
-          duration: Look.medium,
-          curve: Look.ease,
-          child: bar,
-        ),
-      ),
-      child: ListenableBuilder(
-        listenable: Listenable.merge([s.config, s.status, s.updates]),
-        builder: (context, _) => Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final id in s.config.topIcons) ?_topIcon(id),
-            const Spacer(),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Clock(h24: s.config.clock24, face: s.config.clockFont),
-                ValueListenableBuilder<String?>(
-                  valueListenable: s.caption,
-                  builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption
-                      ? const SizedBox.shrink()
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(caption, style: Look.caption),
-                        ),
-                ),
-              ],
+    child: ListenableBuilder(
+      listenable: Listenable.merge([s.config, s.status, s.updates]),
+      builder: (context, _) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ValueListenableBuilder<bool>(
+            valueListenable: _barShown,
+            builder: (context, shown, icons) => _appearing(shown, icons),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [for (final id in s.config.topIcons) ?_topIcon(id)],
             ),
-          ],
-        ),
+          ),
+          const Spacer(),
+          ListenableBuilder(
+            listenable: _clockChanges,
+            builder: (context, _) => _appearing(
+              _clockShown,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Clock(h24: s.config.clock24, face: s.clockTrial.value ?? s.config.clockFont),
+                  ValueListenableBuilder<String?>(
+                    valueListenable: s.caption,
+                    builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(caption, style: Look.caption),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     ),
   );

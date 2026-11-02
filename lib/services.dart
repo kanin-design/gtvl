@@ -44,6 +44,9 @@ class Services {
   /// The screensaver shows: no button pressed for a while, so only the wallpaper is on screen.
   final saver = ValueNotifier(false);
 
+  /// A clock face being tried in settings, by its id: the clock shows in it, beside the panel.
+  final clockTrial = ValueNotifier<String?>(null);
+
   /// A short line about something that didn't happen ("Couldn't open
   /// Plex"), shown above the dock for a few seconds.
   final notice = Notice();
