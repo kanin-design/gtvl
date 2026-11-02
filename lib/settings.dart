@@ -45,6 +45,14 @@ const _qualities = [('1080p', '1080p'), ('1080p_hdr', '1080p HDR'), ('4k', '4K')
 const _speeds = [(0.5, 'Half'), (0.75, 'Three quarters'), (1.0, 'Normal')];
 const _nextFilm = [(0, 'When a film ends'), (2, 'Every 2 minutes'), (5, 'Every 5 minutes'), (10, 'Every 10 minutes')];
 const _dimming = [(0.0, 'None'), (0.1, 'Light'), (0.2, 'Medium'), (0.35, 'Strong')];
+const _saverAfter = [
+  (0, 'Off'),
+  (5, 'After 5 minutes'),
+  (10, 'After 10 minutes'),
+  (20, 'After 20 minutes'),
+  (30, 'After 30 minutes'),
+  (60, 'After 1 hour'),
+];
 const _sizes = [('xs', 'Extra small'), ('s', 'Small'), ('m', 'Medium'), ('l', 'Large'), ('xl', 'Extra large')];
 const _shapes = [('wide', 'Wide banners'), ('square', 'Square icons')];
 const _arrangements = [
@@ -545,6 +553,30 @@ class _SettingsPanelState extends State<SettingsPanel> {
         value: _label(_dimming, c.dimming),
         chevron: true,
         onPressed: () => _choose('Dimming', _dimming, () => c.dimming, (v) => c.dimming = v),
+      ),
+      _Row(
+        'Screensaver',
+        value: _label(_saverAfter, c.saverMinutes),
+        chevron: true,
+        onPressed: () async {
+          final sleep = await Native.sleepAfter();
+          if (!mounted) return;
+          _choose(
+            'Screensaver',
+            _saverAfter,
+            () => c.saverMinutes,
+            (v) {
+              c.saverMinutes = v;
+              Native.saverAfter(v);
+            },
+            // Rows for times the TV never reaches stay, greyed out, with the reason below.
+            enabled: sleep == null ? null : (int v) => v < sleep,
+            note:
+                'With no button pressed for this long, only the wallpaper stays on screen. Any button brings the dock '
+                'back. A gradient or a single picture gives way to Apple aerials.'
+                '${sleep == null || sleep > _saverAfter.last.$1 ? '' : ' This TV goes to sleep after $sleep minutes, which Android settings can change.'}',
+          );
+        },
       ),
     ];
   }

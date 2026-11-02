@@ -14,6 +14,11 @@ files are smaller builds for 64-bit and 32-bit Android.
   video loops seamlessly, for a set time when there are several); or a
   gradient. HDR films play on the TV's own video layer, in Dolby Vision where
   the TV shows it.
+- **Screensaver:** after a while with no button pressed (20 minutes unless
+  changed, under Settings › Wallpaper), only the wallpaper stays on screen. A
+  gradient or a single picture gives way to Apple aerials meanwhile. Any button
+  brings the dock back and does nothing else. It takes the place of Android's
+  own screensaver while GTVL is on screen; the TV still sleeps at its own time.
 - **Dock:** a full-width glass bar of favourite apps, lit from within behind
   the app in focus; Down shows all other apps.
   Apps show as wide TV banners or square icons, in five sizes, with
@@ -83,7 +88,8 @@ in `ui.dart`.
 their tiles, launches them, and reports app, network and VPN changes;
 `AppRows.kt` reads the rows other apps share; `HdrDeck.kt` plays HDR films
 on a video layer beneath the screen; `ButtonService.kt`, an accessibility
-service, remaps the remote's buttons; `Updater.kt` checks a downloaded update
+service, remaps the remote's buttons; `Idle.kt` says when no button has been
+pressed, for the screensaver; `Updater.kt` checks a downloaded update
 and hands it to Android's installer; `Launch.kt` starts apps.
 
 ## Config

@@ -34,6 +34,7 @@ class Config extends ChangeNotifier {
       aerialMinutes = v.get('aerialMinutes'),
       aerialCache = v.get('aerialCache'),
       dimming = v.number('dimming'),
+      saverMinutes = v.get('saverMinutes'),
       glassBlur = v.number('glassBlur'),
       glassTint = v.get('glassTint'),
       glassTintAlpha = v.number('glassTintAlpha'),
@@ -104,6 +105,9 @@ class Config extends ChangeNotifier {
 
   /// Darkens the wallpaper, 0 to 1.
   double dimming;
+
+  /// The screensaver shows after this many minutes with no button pressed; 0 never.
+  int saverMinutes;
 
   /// The dock's glass: blur radius (0 for none), tint colour and strength, and
   /// the lines along its edges (width 0 for none).
@@ -186,6 +190,7 @@ class Config extends ChangeNotifier {
     'aerialMinutes': aerialMinutes,
     'aerialCache': aerialCache,
     'dimming': dimming,
+    'saverMinutes': saverMinutes,
     'glassBlur': glassBlur,
     'glassTint': glassTint,
     'glassTintAlpha': glassTintAlpha,

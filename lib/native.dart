@@ -10,8 +10,9 @@ abstract final class Native {
   /// One shared stream of events: {type: apps}, {type: network, kind, online,
   /// vpn, signal}, {type: home}, {type: buttons} when the button service turns
   /// on or off, {type: open, what} when a remapped button asks for GTVL's
-  /// settings or all apps, {type: hdr, what} from the HDR video layer, and
-  /// {type: update, what, message} from Android's installer.
+  /// settings or all apps, {type: hdr, what} from the HDR video layer,
+  /// {type: update, what, message} from Android's installer, and {type: saver,
+  /// on} when the screensaver should start or end.
   static final Stream<Map<Object?, Object?>> events = _events.receiveBroadcastStream().map(
     (event) => event as Map<Object?, Object?>,
   );
@@ -173,6 +174,16 @@ abstract final class Native {
 
   /// Lets go of the HDR video layer and its decoder.
   static Future<void> hdrStop() => _main.invokeMethod('hdrStop');
+
+  /// Starts the screensaver after [minutes] with no button pressed; 0 never.
+  static Future<void> saverAfter(int minutes) => _main.invokeMethod('saverAfter', minutes);
+
+  /// The minutes this TV stays awake with no button pressed; null when it
+  /// never sleeps, or that can't be read.
+  static Future<int?> sleepAfter() async {
+    final ms = await _main.invokeMethod<int>('sleepAfter');
+    return ms == null ? null : ms ~/ 60000;
+  }
 
   /// Opens a system settings screen, e.g. "android.settings.WIFI_SETTINGS".
   static Future<void> openSettings([String? action]) => _main.invokeMethod('settings', action);

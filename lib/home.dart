@@ -80,6 +80,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   /// 0: home, with the dock near the bottom. 1: all apps, the dock at the top.
   late final _page = AnimationController(vsync: this, duration: Look.medium);
   late final _eased = CurvedAnimation(parent: _page, curve: Curves.easeInOutCubic);
+
+  /// 1: the screensaver, with everything but the wallpaper out of sight.
+  late final _saver = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 800),
+    reverseDuration: Look.medium,
+  );
+  late final _saving = CurvedAnimation(parent: _saver, curve: Curves.easeInOutCubic);
+  late final _present = ReverseAnimation(_saving);
   final _dock = FocusScopeNode(debugLabel: 'dock');
   final _grid = FocusScopeNode(debugLabel: 'grid');
   final _gridScroll = ScrollController();
@@ -96,6 +105,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final _molten = _Molten(this);
   String? _glowing;
   StreamSubscription<Object?>? _homeKey, _opens;
+
+  /// Where focus last was on this screen, and in the dock which app, by its place.
+  FocusScopeNode? _lastScope;
+  int _dockAt = 0;
+
+  /// Waiting to see whether focus has really gone nowhere.
+  Timer? _lost;
 
   @override
   void initState() {
@@ -117,14 +133,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _enter(_grid);
       }
     });
+    s.saver.addListener(_onSaver);
+    s.apps.addListener(_checkFocus);
+    FocusManager.instance.addListener(_checkFocus);
   }
 
   @override
   void dispose() {
     _homeKey?.cancel();
     _opens?.cancel();
+    s.saver.removeListener(_onSaver);
+    s.apps.removeListener(_checkFocus);
+    FocusManager.instance.removeListener(_checkFocus);
+    _lost?.cancel();
     _eased.dispose();
     _page.dispose();
+    _saving.dispose();
+    _saver.dispose();
     _dock.dispose();
     _grid.dispose();
     _gridScroll.dispose();
@@ -133,6 +158,67 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _barShown.dispose();
     _molten.dispose();
     super.dispose();
+  }
+
+  /// Everything closes and the dock waits, out of sight, for the button that
+  /// brings it back.
+  void _onSaver() {
+    if (s.saver.value) {
+      _goHome(closeMenus: true);
+      _saver.forward();
+    } else {
+      _saver.reverse();
+    }
+  }
+
+  /// An item is always in focus, or the remote does nothing. When a focused
+  /// item goes, Flutter falls back on whichever was focused before it, and
+  /// with none on the scope around it or the screen as a whole, where nothing
+  /// shows as selected and keys may reach no item. Focus also passes through
+  /// such places on its way between items, as a menu opens: focus still there
+  /// a moment later is lost.
+  void _checkFocus() {
+    if (!_noItem) return;
+    _lost ??= Timer(const Duration(milliseconds: 100), () {
+      _lost = null;
+      if (mounted && _noItem) _refocus();
+    });
+  }
+
+  /// A scope has focus, not an item in it. A level of settings with no rows
+  /// takes focus itself, so that Left still works there.
+  bool get _noItem => switch (FocusManager.instance.primaryFocus) {
+    final FocusScopeNode scope => _onTop || scope.traversalDescendants.isNotEmpty,
+    _ => false,
+  };
+
+  /// Focuses the nearest item: on the home screen in the place focus last was,
+  /// else on the screen over it the item focused last there, else its first.
+  void _refocus() {
+    if (!_onTop) {
+      final route = Navigator.of(context).focusNode.enclosingScope?.focusedChild;
+      if (route is! FocusScopeNode) return;
+      FocusNode? item = route;
+      while (item is FocusScopeNode) {
+        item = item.focusedChild;
+      }
+      (item ?? route.traversalDescendants.where((node) => node is! FocusScopeNode).firstOrNull)?.requestFocus();
+      return;
+    }
+    // The dock's first app takes focus as soon as the apps are known.
+    if (!s.apps.loaded) return;
+    if (_moving != null) setState(() => _moving = null);
+    final apps = s.apps.dock;
+    final last = _lastScope;
+    final item = last == null || last == _dock ? null : last.focusedChild ?? _topLeft(last);
+    if (item != null) {
+      item.requestFocus();
+      if (item.context case final context?) reveal(context);
+    } else if (apps.isNotEmpty) {
+      _focusTile(_dock, apps[_dockAt.clamp(0, apps.length - 1)].package);
+    } else {
+      _goHome();
+    }
   }
 
   /// Focuses the item last focused in [scope], or its top-left one; with
@@ -176,7 +262,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _goHome({bool closeMenus = false}) {
     if (closeMenus) Navigator.of(context).popUntil((route) => route.isFirst);
     if (_moving != null) setState(() => _moving = null);
-    _enter(s.apps.dock.isEmpty ? _grid : _dock);
+    final allGone = s.apps.loaded && s.apps.dock.isEmpty && _grid.traversalDescendants.isEmpty;
+    // With nothing in the dock or below it, the top bar's gear is always there.
+    _enter(allGone ? _bar : (s.apps.dock.isEmpty ? _grid : _dock));
   }
 
   static bool _isPress(KeyEvent event) => event is KeyDownEvent || event is KeyRepeatEvent;
@@ -310,14 +398,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               const Wallpaper(),
               // A light vignette under the dock, so it and its names hold on bright films.
-              const IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Color(0x00000000), Color(0x00000000), Color(0x40000000)],
-                      stops: [0, 0.5, 1],
+              IgnorePointer(
+                child: FadeTransition(
+                  opacity: _present,
+                  child: const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x00000000), Color(0x00000000), Color(0x40000000)],
+                        stops: [0, 0.5, 1],
+                      ),
                     ),
                   ),
                 ),
@@ -326,7 +417,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               IgnorePointer(
                 child: FadeTransition(
                   opacity: eased,
-                  child: const ColoredBox(color: Color(0x73000000)),
+                  child: FadeTransition(
+                    opacity: _present,
+                    child: const ColoredBox(color: Color(0x73000000)),
+                  ),
                 ),
               ),
               ListenableBuilder(
@@ -338,15 +432,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       right: 0,
                       top: g.gridTop,
                       bottom: 0,
-                      child: AnimatedBuilder(
-                        animation: eased,
-                        child: RepaintBoundary(child: _gridView(g)),
-                        // Below the screen while home; not painted at all until it moves.
-                        builder: (context, grid) => Opacity(
-                          opacity: eased.value == 0 ? 0 : 1,
-                          child: Transform.translate(
-                            offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
-                            child: grid,
+                      child: FadeTransition(
+                        opacity: _present,
+                        child: AnimatedBuilder(
+                          animation: eased,
+                          child: RepaintBoundary(child: _gridView(g)),
+                          // Below the screen while home; not painted at all until it moves.
+                          builder: (context, grid) => Opacity(
+                            opacity: eased.value == 0 ? 0 : 1,
+                            child: Transform.translate(
+                              offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
+                              child: grid,
+                            ),
                           ),
                         ),
                       ),
@@ -357,15 +454,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       top: g.dockIdle - _bleedRoom,
                       height: g.dockHeight + 2 * _bleedRoom,
                       child: AnimatedBuilder(
-                        animation: eased,
+                        animation: Listenable.merge([eased, _saving]),
                         child: RepaintBoundary(child: _dockBar(g)),
+                        // Off the bottom for the screensaver, not faded, which would stop its glass blurring.
                         builder: (context, dock) => Transform.translate(
-                          offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)),
-                          child: Stack(
-                            children: [
-                              Positioned.fill(child: RepaintBoundary(child: _bleed(g, 1 - eased.value))),
-                              Positioned(left: 0, right: 0, top: _bleedRoom, height: g.dockHeight, child: dock!),
-                            ],
+                          offset: Offset(
+                            0,
+                            eased.value * (g.dockTop - g.dockIdle) +
+                                _saving.value * (g.height - g.dockIdle + _bleedRoom),
+                          ),
+                          child: Offstage(
+                            offstage: _saving.value == 1,
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: RepaintBoundary(child: _bleed(g, (1 - eased.value) * (1 - _saving.value))),
+                                ),
+                                Positioned(left: 0, right: 0, top: _bleedRoom, height: g.dockHeight, child: dock!),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -375,20 +482,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       right: 0,
                       top: g.dockIdle - 48,
                       child: Center(
-                        child: ValueListenableBuilder<String?>(
-                          valueListenable: s.notice,
-                          builder: (context, notice, _) => AnimatedSwitcher(
-                            duration: Look.medium,
-                            switchInCurve: Look.ease,
-                            switchOutCurve: Curves.easeIn,
-                            child: switch ((_moving, notice)) {
-                              (_?, _) => const Pill(
-                                'Left and Right move the app · OK when done',
-                                key: ValueKey('move'),
-                              ),
-                              (_, final text?) => Pill(text, key: ValueKey(text)),
-                              _ => const SizedBox.shrink(),
-                            },
+                        child: FadeTransition(
+                          opacity: _present,
+                          child: ValueListenableBuilder<String?>(
+                            valueListenable: s.notice,
+                            builder: (context, notice, _) => AnimatedSwitcher(
+                              duration: Look.medium,
+                              switchInCurve: Look.ease,
+                              switchOutCurve: Curves.easeIn,
+                              child: switch ((_moving, notice)) {
+                                (_?, _) => const Pill(
+                                  'Left and Right move the app · OK when done',
+                                  key: ValueKey('move'),
+                                ),
+                                (_, final text?) => Pill(text, key: ValueKey(text)),
+                                _ => const SizedBox.shrink(),
+                              },
+                            ),
                           ),
                         ),
                       ),
@@ -432,7 +542,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final c = s.config;
     // The app the glow is under may have moved along, or another app gone.
     final glowing = apps.indexWhere((app) => app.package == _glowing);
-    if (glowing >= 0) _molten.focus(glowing);
+    if (glowing >= 0) {
+      _dockAt = glowing;
+      _molten.focus(glowing);
+    }
     final names = c.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, step) = _centres(g, apps.length, c.dockAlign);
     // With the glow off, the apps take focus as they do elsewhere.
@@ -444,6 +557,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       onKeyEvent: _onDockKey,
       onFocusChange: (focused) {
         if (focused) {
+          _lastScope = _dock;
           _page.reverse();
         } else {
           _glowing = null;
@@ -511,6 +625,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     onFocusChange: (focused) {
                                       if (!focused) return;
                                       _glowing = apps[i].package;
+                                      _dockAt = i;
                                       _molten.focus(i);
                                     },
                                   ),
@@ -588,7 +703,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       node: _grid,
       onKeyEvent: _onGridKey,
       onFocusChange: (focused) {
-        if (focused) _page.forward();
+        if (!focused) return;
+        _lastScope = _grid;
+        _page.forward();
       },
       child: FocusTraversalGroup(
         policy: smoothTraversal,
@@ -657,7 +774,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _topBar() => FocusScope(
     node: _bar,
     onKeyEvent: _onBarKey,
-    onFocusChange: (focused) => _barShown.value = focused,
+    onFocusChange: (focused) {
+      _barShown.value = focused;
+      if (focused) _lastScope = _bar;
+    },
     child: ValueListenableBuilder<bool>(
       valueListenable: _barShown,
       builder: (context, shown, bar) => AnimatedOpacity(

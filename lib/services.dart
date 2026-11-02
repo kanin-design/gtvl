@@ -13,7 +13,9 @@ import 'updates.dart';
 
 /// Everything the UI shares, created once at start.
 class Services {
-  Services._(this.files, this.config, this.apps, this.status, this.aerials, this.plex, this.appRows, this.updates);
+  Services._(this.files, this.config, this.apps, this.status, this.aerials, this.plex, this.appRows, this.updates) {
+    Native.events.where((event) => event['type'] == 'saver').listen((event) => saver.value = event['on'] == true);
+  }
 
   /// The app's private folder, where downloaded wallpapers are kept.
   final String files;
@@ -39,6 +41,9 @@ class Services {
   /// leaves the wallpaper's place see-through.
   final hdrBeneath = ValueNotifier(false);
 
+  /// The screensaver shows: no button pressed for a while, so only the wallpaper is on screen.
+  final saver = ValueNotifier(false);
+
   /// A short line about something that didn't happen ("Couldn't open
   /// Plex"), shown above the dock for a few seconds.
   final notice = Notice();
@@ -49,6 +54,7 @@ class Services {
     final paths = await Native.paths();
     final config = await Config.load(paths.files);
     Native.remap(config.remotes);
+    Native.saverAfter(config.saverMinutes);
     final aerials = Aerials('${paths.cache}/aerial', hdr: await hdr);
     await aerials.load();
     final apps = AppsModel(config)..load();
