@@ -29,6 +29,7 @@ class Config extends ChangeNotifier {
       vpnApp = v.get('vpnApp'),
       clock24 = v.get('clock24'),
       clockFont = v.get('clockFont'),
+      clockOpacity = v.number('clockOpacity'),
       showCaption = v.get('showCaption'),
       aerialsOff = {...v.strings('aerialsOff')},
       aerialSpeed = v.number('aerialSpeed'),
@@ -93,6 +94,9 @@ class Config extends ChangeNotifier {
 
   /// The clock's face, by its id in ClockFace.all.
   String clockFont;
+
+  /// How solid the time and date are, 0 to 1; the wallpaper shows through the rest.
+  double clockOpacity;
 
   /// The wallpaper's location, under the clock.
   bool showCaption;
@@ -189,6 +193,7 @@ class Config extends ChangeNotifier {
     'vpnApp': vpnApp,
     'clock24': clock24,
     'clockFont': clockFont,
+    'clockOpacity': clockOpacity,
     'showCaption': showCaption,
     'aerialsOff': aerialsOff.toList(),
     'aerialSpeed': aerialSpeed,

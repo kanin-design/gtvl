@@ -817,7 +817,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Clock(h24: s.config.clock24, face: s.clockTrial.value ?? s.config.clockFont),
+                  Opacity(
+                    opacity: s.config.clockOpacity,
+                    child: Clock(h24: s.config.clock24, face: s.clockTrial.value ?? s.config.clockFont),
+                  ),
                   ValueListenableBuilder<String?>(
                     valueListenable: s.caption,
                     builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption

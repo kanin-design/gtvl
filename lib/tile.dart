@@ -32,13 +32,12 @@ class Glow {
 /// with [square], its icon in a rounded square.
 ///
 /// Focus lifts the tile toward the viewer on a spring: it grows, its shadow
-/// deepens, light runs along its rim, brightest at the top left, and a soft
-/// sheen crosses its face. At rest a faint rim of the same light keeps dark
-/// icons in shape on dark glass. OK sinks it a little. No outline.
+/// deepens, and its hairline brightens. At rest a faint hairline keeps dark
+/// icons in shape on dark glass. OK sinks it a little.
 ///
 /// In the dock's glass ([glow]), focus lifts it in front of the lamp glowing
-/// behind the glass instead: no shadow or sheen, and its edge catches the
-/// glow behind it, as every tile's does, most on the side toward the lamp.
+/// behind the glass instead: no shadow, and its edge catches the glow behind
+/// it, as every tile's does, most on the side toward the lamp.
 class AppTile extends StatelessWidget {
   const AppTile({
     super.key,
@@ -136,6 +135,7 @@ class AppTile extends StatelessWidget {
               glow: hot,
               index: index,
               scale: 1 + 0.12 * t,
+              ratio: MediaQuery.devicePixelRatioOf(context),
             ),
             child: picture,
           );
@@ -188,9 +188,8 @@ class AppTile extends StatelessWidget {
   );
 }
 
-/// Light on a tile, from the top left: a rim along its edge, faint at rest and
-/// bright in focus, and in focus a soft sheen across its face. [lift] goes
-/// from 0 at rest to 1 in focus.
+/// A tile's edge: a hairline of one screen pixel, in one even colour, faint at
+/// rest and bright in focus. [lift] goes from 0 at rest to 1 in focus.
 ///
 /// With the dock's [glow]: its outer dp catches a share of the glass's glow
 /// behind it (see glow.dart), most on the side toward the lamp. [scale] is
@@ -200,7 +199,7 @@ class AppTile extends StatelessWidget {
 /// path: a TV redraws the dock every frame while its glow moves, and works
 /// out a path's outline afresh each time.
 class _Light extends CustomPainter {
-  _Light(this.corners, this.lift, {required this.square, this.glow, this.index = 0, this.scale = 1});
+  _Light(this.corners, this.lift, {required this.square, this.glow, this.index = 0, this.scale = 1, this.ratio = 1});
 
   final BorderRadius corners;
   final bool square;
@@ -208,7 +207,8 @@ class _Light extends CustomPainter {
   final Glow? glow;
   final int index;
 
-  static Color _white(double alpha) => Color.fromRGBO(255, 255, 255, alpha);
+  /// The screen's pixels to a dp, for the hairline.
+  final double ratio;
 
   /// The tile's outline fitted to [rect], filled or stroked by [paint].
   void _outline(Canvas canvas, Rect rect, Paint paint) => square
@@ -218,34 +218,15 @@ class _Light extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final width = 1 + 0.25 * lift;
-    // Brightest at the top left, almost gone across the middle, and a faint
-    // glint again at the far corner, as light runs through glass.
+    final hairline = 1 / (ratio * scale);
     _outline(
       canvas,
-      rect.deflate(width / 2),
+      rect.deflate(hairline / 2),
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = width
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_white(0.22 + 0.42 * lift), _white(0.06 + 0.06 * lift), _white(0.08 + 0.12 * lift)],
-          stops: const [0, 0.55, 1],
-        ).createShader(rect),
+        ..strokeWidth = hairline
+        ..color = Color.fromRGBO(255, 255, 255, 0.16 + 0.64 * lift),
     );
-    if (lift > 0) {
-      _outline(
-        canvas,
-        rect,
-        Paint()
-          ..shader = LinearGradient(
-            begin: Alignment.topLeft,
-            end: const Alignment(-0.1, 0.1),
-            colors: [_white(0.09 * lift), _white(0)],
-          ).createShader(rect),
-      );
-    }
     final glow = this.glow;
     if (glow == null || glow.heat < 0.01 || glow.step <= 0) return;
     // The lamp is as big as the tile, enlarged as the shader has it; this
@@ -281,7 +262,8 @@ class _Light extends CustomPainter {
       old.corners != corners ||
       old.square != square ||
       old.glow != glow ||
-      old.index != index;
+      old.index != index ||
+      old.ratio != ratio;
 }
 
 /// A damped spring: quick off the mark, a touch past it, then settled, as a

@@ -20,6 +20,7 @@
   "vpnApp": null,
   "clock24": true,
   "clockFont": "poiret",
+  "clockOpacity": 0.7,
   "showCaption": true,
   "aerialsOff": [
     "space",

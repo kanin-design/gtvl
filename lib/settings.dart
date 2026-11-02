@@ -220,6 +220,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   void dispose() {
     _closeAll();
+    _endClockTrial();
     _buttonEvents?.cancel();
     _lifecycle.dispose();
     for (final node in _sectionNodes.values) {
@@ -1287,6 +1288,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
+  /// Hides the clock again, after this frame: the home screen rebuilds for it.
+  void _endClockTrial() {
+    final trial = s.clockTrial;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) => trial.value = null)
+      ..scheduleFrame();
+  }
+
   /// The faces. The clock itself shows beside the panel, in whichever has focus.
   List<Widget> _clockFontRows() {
     final c = s.config;
@@ -1295,7 +1304,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
         _Row(
           face.label,
           checked: face.id == c.clockFont,
-          onFocused: () => s.clockTrial.value = face.id,
+          onFocusChange: (focused) {
+            if (focused) s.clockTrial.value = face.id;
+          },
           onPressed: () {
             c.clockFont = face.id;
             c.changed();
@@ -1328,10 +1339,27 @@ class _SettingsPanelState extends State<SettingsPanel> {
         'Clock font',
         value: _short(ClockFace.of(c.clockFont).label),
         chevron: true,
-        onPressed: () => _push(
-          _Page('Clock font', _clockFontRows, onClose: () => s.clockTrial.value = null),
-          focus: ClockFace.of(c.clockFont).label,
-        ),
+        onPressed: () =>
+            _push(_Page('Clock font', _clockFontRows, onClose: _endClockTrial), focus: ClockFace.of(c.clockFont).label),
+      ),
+      // The clock itself shows beside the menu while this has focus.
+      _Slider(
+        'Clock opacity',
+        value: c.clockOpacity,
+        min: 0.2,
+        max: 1,
+        usual: 0.7,
+        onFocusChange: (focused) {
+          if (focused) {
+            s.clockTrial.value = c.clockFont;
+          } else {
+            _endClockTrial();
+          }
+        },
+        onChanged: (v) {
+          c.clockOpacity = v;
+          c.changed();
+        },
       ),
       _Row(
         '24-hour clock',
@@ -1893,7 +1921,7 @@ class _Row extends StatelessWidget {
     this.onPressed,
     this.onLongPress,
     this.onKey,
-    this.onFocused,
+    this.onFocusChange,
   });
 
   final String label;
@@ -1916,7 +1944,7 @@ class _Row extends StatelessWidget {
   final VoidCallback? onPressed;
   final VoidCallback? onLongPress;
   final KeyEventResult Function(KeyEvent event)? onKey;
-  final VoidCallback? onFocused;
+  final ValueChanged<bool>? onFocusChange;
 
   @override
   Widget build(BuildContext context) {
@@ -1925,9 +1953,7 @@ class _Row extends StatelessWidget {
     return Pressable(
       onPressed: enabled ? onPressed : null,
       onLongPress: enabled ? onLongPress : null,
-      onFocusChange: (focused) {
-        if (focused) onFocused?.call();
-      },
+      onFocusChange: onFocusChange,
       onKey: (event) {
         final custom = onKey?.call(event) ?? KeyEventResult.ignored;
         if (custom != KeyEventResult.ignored) return custom;
@@ -2218,14 +2244,24 @@ class _Code extends StatelessWidget {
 
 /// A setting that slides: Left and Right change it a step at a time, and
 /// held they keep going; the dock behind shows each step at once. It reads
-/// as a share of the usual value (1, today's look), which a tick marks.
+/// as a share, with a tick at the [usual] value (1 unless it says otherwise).
 /// Left adjusts here, so Back is the way out.
 class _Slider extends StatelessWidget {
-  const _Slider(this.label, {required this.value, required this.min, required this.max, required this.onChanged});
+  const _Slider(
+    this.label, {
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    this.onFocusChange,
+    this.usual = 1,
+  });
 
   final String label;
   final double value, min, max;
   final ValueChanged<double> onChanged;
+  final ValueChanged<bool>? onFocusChange;
+  final double usual;
 
   static const _step = 0.05;
 
@@ -2234,6 +2270,7 @@ class _Slider extends StatelessWidget {
     final percent = '${(value * 100).round()}%';
     if (_Column.of(context)?.folded ?? false) return _Row(label, value: percent);
     return Pressable(
+      onFocusChange: onFocusChange,
       onKey: (event) {
         if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
         final direction = switch (event.logicalKey) {
@@ -2283,7 +2320,7 @@ class _Slider extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            _Track(at: (value - min) / (max - min), usual: (1 - min) / (max - min), focused: focused),
+            _Track(at: (value - min) / (max - min), usual: (usual - min) / (max - min), focused: focused),
           ],
         ),
       ),
