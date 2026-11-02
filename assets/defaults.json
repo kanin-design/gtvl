@@ -19,6 +19,7 @@
   "topHidden": [],
   "vpnApp": null,
   "clock24": true,
+  "clockFont": "poiret",
   "showCaption": true,
   "aerialsOff": [
     "space",

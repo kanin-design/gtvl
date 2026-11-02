@@ -1287,6 +1287,32 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
+  /// The faces, with the clock itself under them: settings hide it on the home screen.
+  List<Widget> _clockFontRows() {
+    final c = s.config;
+    return [
+      for (final face in ClockFace.all)
+        _Row(
+          face.label,
+          checked: face.id == c.clockFont,
+          onPressed: () {
+            c.clockFont = face.id;
+            c.changed();
+          },
+        ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 22, 14, 8),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Clock(h24: c.clock24, face: c.clockFont),
+          ),
+        ),
+      ),
+    ];
+  }
+
   List<Widget> _topBarRows() {
     final c = s.config;
     final vpnApps = s.status.vpnApps;
@@ -1307,6 +1333,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
           ),
         ),
       const _Header('Clock'),
+      _Row(
+        'Clock font',
+        value: _short(ClockFace.of(c.clockFont).label),
+        chevron: true,
+        onPressed: () => _push(_Page('Clock font', _clockFontRows), focus: ClockFace.of(c.clockFont).label),
+      ),
       _Row(
         '24-hour clock',
         toggle: c.clock24,

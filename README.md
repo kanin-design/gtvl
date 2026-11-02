@@ -28,7 +28,8 @@ files are smaller builds for 64-bit and 32-bit Android.
   in with a code at plex.tv/link) and from apps that share rows with the home
   screen, such as HBO Max and NRK TV, between the dock and all apps.
 - **Top bar:** hidden until Up, which moves into it. Settings, network and
-  VPN icons, each optional and reorderable, plus the clock.
+  VPN icons, each optional and reorderable, with the dock's orange glow behind
+  the icon in focus, plus the time and date in your choice of eight typefaces.
 - **Updates:** GTVL finds new versions in this repository's latest release,
   downloads the APK for the TV and checks it (size, SHA-256, that it is GTVL,
   newer, and signed with the same key) before Android installs it. With
@@ -109,5 +110,9 @@ gallery shows the file's name, so `arc-fold.mp4` reads "Arc fold".
 
 Aerial films by Apple. The film list comes from the
 [Overflight](https://github.com/spocky/projectivy-plugin-wallpaper-overflight)
-project (Apache-2.0). The typeface is [Inter](https://github.com/rsms/inter),
-under the SIL Open Font License (`assets/fonts/OFL.txt`).
+project (Apache-2.0). The UI's typeface is [Inter](https://github.com/rsms/inter). The clock's are
+Poiret One, Big Shoulders Display, Tulpen One, Teko, Doto, Sofia Sans Extra
+Condensed, Instrument Serif and Jost. All are under the SIL Open Font License
+(`assets/fonts/OFL*.txt`). The top bar's icons are
+[Phosphor](https://phosphoricons.com), under the MIT License
+(`assets/fonts/LICENSE-Phosphor.txt`).

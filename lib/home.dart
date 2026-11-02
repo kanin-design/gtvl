@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -506,12 +505,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ],
                 ),
               ),
-              // A shade behind the top bar while it shows, so the clock and icons read on bright films.
+              // A soft shade behind the time and date only, so they hold on bright film.
               Positioned(
-                left: 0,
                 right: 0,
                 top: 0,
-                height: g.height * 0.32,
+                width: 480,
+                height: 240,
                 child: IgnorePointer(
                   child: ValueListenableBuilder<bool>(
                     valueListenable: _barShown,
@@ -519,17 +518,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         AnimatedOpacity(opacity: shown ? 1 : 0, duration: Look.medium, child: shade),
                     child: const DecoratedBox(
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Color(0x80000000), Color(0x00000000)],
+                        gradient: RadialGradient(
+                          center: Alignment(0.22, -0.1),
+                          colors: [Color(0x66000000), Color(0x00000000)],
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-              Positioned(left: g.pad - 13, right: g.pad, top: g.height * 0.05, child: _topBar()),
+              // The icons' glyphs line up with the dock's first app.
+              Positioned(left: g.pad - (_chipGap + _chip - _glyph) / 2, right: g.pad, top: g.pad - 8, child: _topBar()),
             ],
           );
         },
@@ -565,8 +564,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
       },
       child: Glass(
-        sigma: c.glassBlur,
-        tint: Color(c.glassTint).withValues(alpha: c.glassTintAlpha),
+        sigma: math.max(c.glassBlur, 16),
+        tint: const Color(0x801C1C1E),
         vibrancy: 1.35,
         child: CustomPaint(
           painter: _BandLight(line: c.lineWidth, alpha: c.lineAlpha),
@@ -771,6 +770,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  /// A top icon's size, the gap between them, and the size of the glyph in one.
+  static const _chip = 40.0, _chipGap = 8.0, _glyph = 26.0;
+
   Widget _topBar() => FocusScope(
     node: _bar,
     onKeyEvent: _onBarKey,
@@ -800,17 +802,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Level with the icons' middles.
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Clock(h24: s.config.clock24),
-                ),
+                Clock(h24: s.config.clock24, face: s.config.clockFont),
                 ValueListenableBuilder<String?>(
                   valueListenable: s.caption,
                   builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption
                       ? const SizedBox.shrink()
                       : Padding(
-                          padding: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.only(top: 6),
                           child: Text(caption, style: Look.caption),
                         ),
                 ),
@@ -824,14 +822,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget? _topIcon(String id) {
     final hidden = s.config.topHidden.contains(id);
+    final glow = GlowLook.of(s.config.dockGlow) != null;
     switch (id) {
       case 'settings':
         // Always there so Up can reach it: a hidden gear shows only while
         // focused, so settings can never be locked away.
         return TopIcon(
           key: ValueKey(id),
-          icon: Icons.settings_outlined,
+          icon: Glyphs.gear,
           collapsed: hidden,
+          glow: glow,
           // An update waits in settings, under About.
           badge: s.updates.waiting,
           onPressed: () => showSettings(context),
@@ -840,6 +840,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return TopIcon(
           key: ValueKey(id),
           icon: s.status.networkIcon,
+          glow: glow,
           onPressed: () => Native.openSettings('android.settings.WIFI_SETTINGS'),
         );
       case 'vpn' when !hidden:
@@ -847,8 +848,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         if (app == null) return null;
         return TopIcon(
           key: ValueKey(id),
-          icon: s.status.vpn ? Icons.vpn_lock : Icons.vpn_lock_outlined,
-          dim: !s.status.vpn,
+          icon: s.status.vpn ? Glyphs.vpnOn : Glyphs.vpnOff,
+          glow: glow,
           onPressed: () async {
             if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.name}");
           },
@@ -858,22 +859,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-/// A top-bar icon. Focus brightens it and sets it on a soft round light.
+/// A top-bar icon, straight on the wallpaper. In focus it becomes a small dark
+/// tile in front of the dock's orange, as a dock app does.
 class TopIcon extends StatelessWidget {
   const TopIcon({
     super.key,
     required this.icon,
     required this.onPressed,
-    this.dim = false,
     this.collapsed = false,
     this.badge = false,
+    this.glow = true,
   });
 
   final IconData icon;
   final VoidCallback onPressed;
-
-  /// Drawn fainter, e.g. a VPN that is off.
-  final bool dim;
 
   /// Takes no space until focused.
   final bool collapsed;
@@ -881,101 +880,117 @@ class TopIcon extends StatelessWidget {
   /// A dot on its corner: something waits behind it.
   final bool badge;
 
+  /// The orange shows behind it in focus; the dock's glow setting.
+  final bool glow;
+
+  static const _chip = _HomeScreenState._chip;
+
+  /// How much a tile in focus is enlarged.
+  static const _lift = 1.08;
+
+  /// What the tile's edge catches of the orange behind it.
+  static final _rim = () {
+    final lamp = _chip / 2 * GlowLook.lampScale;
+    final light = GlowLook.rim * GlowHalo.look.light(_chip / 2 * _lift, 0, lamp, lamp, lamp);
+    final (r, g, b) = GlowLook.colour(1);
+    int channel(double c) => (255 * GlowLook.tone(light * c)).round();
+    return Color.fromARGB(255, channel(r), channel(g), channel(b));
+  }();
+
   @override
   Widget build(BuildContext context) => Pressable(
     onPressed: onPressed,
     builder: (context, focused) {
-      final icon = Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 3),
-        child: AnimatedScale(
-          scale: focused ? 1.08 : 1,
+      final tile = AnimatedScale(
+        scale: focused ? _lift : 1,
+        duration: Look.fast,
+        curve: Look.ease,
+        child: AnimatedContainer(
           duration: Look.fast,
           curve: Look.ease,
-          child: AnimatedContainer(
-            duration: Look.fast,
-            curve: Look.ease,
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: focused ? const Color(0x38FFFFFF) : const Color(0x00FFFFFF),
-              border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
+          width: _chip,
+          height: _chip,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: focused ? const Color(0xF21C1C1E) : const Color(0x001C1C1E),
+            border: Border.all(
+              color: !focused
+                  ? const Color(0x00FFFFFF)
+                  : glow
+                  ? _rim
+                  : Look.focusEdge,
             ),
-            child: Stack(
-              alignment: Alignment.center,
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  this.icon,
-                  size: 22,
-                  color: Look.white.withValues(alpha: focused ? 1 : (dim ? 0.55 : 0.85)),
-                  shadows: focused ? null : Look.shadow,
-                ),
-                if (badge) const Positioned(right: 7, top: 7, child: Badge()),
-              ],
-            ),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              Icon(
+                icon,
+                size: _HomeScreenState._glyph,
+                color: Look.white.withValues(alpha: focused ? 1 : 0.92),
+                shadows: focused ? null : Look.shadow,
+              ),
+              if (badge) const Positioned(right: 5, top: 5, child: Badge()),
+            ],
           ),
         ),
       );
-      if (!collapsed) return icon;
+      final item = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: _HomeScreenState._chipGap / 2),
+        child: !glow
+            ? tile
+            // On like a bulb as focus reaches it, out fast as focus leaves.
+            : TweenAnimationBuilder<double>(
+                tween: Tween(end: focused ? 1 : 0),
+                duration: focused ? const Duration(milliseconds: 80) : const Duration(milliseconds: 200),
+                child: tile,
+                builder: (context, heat, tile) => CustomPaint(
+                  painter: heat == 0
+                      ? null
+                      : _HaloPainter(
+                          heat,
+                          radius: _chip / 2 * GlowLook.lampScale,
+                          ratio: MediaQuery.devicePixelRatioOf(context),
+                        ),
+                  child: tile,
+                ),
+              ),
+      );
+      if (!collapsed) return item;
       return ClipRect(
-        child: Align(alignment: Alignment.centerLeft, widthFactor: focused ? 1 : 0, child: icon),
+        child: Align(alignment: Alignment.centerLeft, widthFactor: focused ? 1 : 0, child: item),
       );
     },
   );
 }
 
-/// The time, updated on the minute.
-class Clock extends StatefulWidget {
-  const Clock({super.key, required this.h24});
+/// Places the orange's one image, added to the wallpaper, at [heat].
+class _HaloPainter extends CustomPainter {
+  _HaloPainter(this.heat, {required this.radius, required this.ratio});
 
-  final bool h24;
-
-  @override
-  State<Clock> createState() => _ClockState();
-}
-
-class _ClockState extends State<Clock> {
-  Timer? _timer;
+  final double heat, radius, ratio;
 
   @override
-  void initState() {
-    super.initState();
-    _schedule();
-  }
-
-  void _schedule() {
-    _timer = Timer(Duration(seconds: 60 - DateTime.now().second), () {
-      if (!mounted) return;
-      setState(() {});
-      _schedule();
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final hour = widget.h24 ? now.hour.toString().padLeft(2, '0') : '${(now.hour + 11) % 12 + 1}';
-    return Text.rich(
-      TextSpan(
-        text: '$hour:${now.minute.toString().padLeft(2, '0')}',
-        children: [
-          if (!widget.h24)
-            TextSpan(
-              text: now.hour < 12 ? ' am' : ' pm',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xCCFFFFFF)),
-            ),
-        ],
-      ),
-      style: Look.clock,
+  void paint(Canvas canvas, Size size) {
+    final image = GlowHalo.image(radius, ratio);
+    if (image == null) return;
+    final (r, g, b) = GlowLook.fade(heat);
+    if (r <= 0) return;
+    final side = 2 * (radius + GlowHalo.reach);
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0, 0, side * ratio, side * ratio),
+      Rect.fromCenter(center: size.center(Offset.zero), width: side, height: side),
+      Paint()
+        ..blendMode = BlendMode.plus
+        ..filterQuality = FilterQuality.low
+        ..colorFilter = ColorFilter.mode(Color.from(alpha: r, red: 1, green: g / r, blue: b / r), BlendMode.modulate),
     );
   }
+
+  @override
+  bool shouldRepaint(_HaloPainter old) => old.heat != heat || old.radius != radius || old.ratio != ratio;
 }
 
 /// Light on the dock's glass, from above: an edge along its top, brightest a

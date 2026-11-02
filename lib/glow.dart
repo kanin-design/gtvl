@@ -193,6 +193,67 @@ abstract final class GlowShader {
   static ui.FragmentShader? create() => _program?.fragmentShader();
 }
 
+/// The dock's orange behind a small round item in focus, a top-bar icon: tight
+/// to its edge, with none of the glass's light. Drawn once by the shader, as
+/// every icon's is the same; each frame only places it.
+abstract final class GlowHalo {
+  static const look = GlowLook(
+    core: 0,
+    coreBlur: 1,
+    pool: 0.3,
+    poolSize: 1.8,
+    poolPower: 1.3,
+    glass: 0,
+    glassLength: 1,
+    edges: 0,
+    edgeLength: 1,
+    bleed: 0,
+    bleedSize: 1,
+    bleedPower: 1,
+    bleedTint: (1, 1, 1),
+  );
+
+  /// How far its light reaches beyond the lamp (dp).
+  static const reach = 16.0;
+
+  static ui.Image? _image;
+  static double _radius = 0, _ratio = 0;
+
+  /// Its image for a lamp of [radius], at [ratio] pixels a dp; null until the shader has loaded.
+  static ui.Image? image(double radius, double ratio) {
+    if (_image != null && _radius == radius && _ratio == ratio) return _image;
+    final shader = GlowShader.create();
+    if (shader == null) return null;
+    final side = 2 * (radius + reach);
+    final size = Size.square(side);
+    setGlow(
+      shader,
+      size,
+      look: look,
+      x: side / 2,
+      y: side / 2,
+      hw: radius,
+      hh: radius,
+      r: radius,
+      top: 0,
+      bottom: side,
+      tint: GlowLook.colour(1),
+    );
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder)
+      ..scale(ratio)
+      ..drawRect(Offset.zero & size, Paint()..shader = shader);
+    final picture = recorder.endRecording();
+    _image?.dispose();
+    _image = picture.toImageSync((side * ratio).ceil(), (side * ratio).ceil());
+    picture.dispose();
+    shader.dispose();
+    _radius = radius;
+    _ratio = ratio;
+    return _image;
+  }
+}
+
 /// A lamp along the dock: its centre and heat; an [ember] is going out where
 /// focus was.
 typedef Spot = ({double x, double heat, bool ember});

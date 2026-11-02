@@ -27,8 +27,37 @@ flutter:
     - assets/aerials.json
     - assets/defaults.json
     - assets/apple_root_ca.pem
-  # One variable font: FontWeight sets its weight axis. Licence in OFL.txt.
+  # The UI's, a variable font whose weight axis FontWeight sets; the clock's
+  # faces (ClockFace); the top bar's icons, of which release builds keep just
+  # the glyphs in use. Licences beside them.
   fonts:
     - family: Inter
       fonts:
         - asset: assets/fonts/Inter.ttf
+    - family: PoiretOne
+      fonts:
+        - asset: assets/fonts/PoiretOne-Regular.ttf
+    - family: BigShouldersDisplay
+      fonts:
+        - asset: assets/fonts/BigShouldersDisplay.ttf
+    - family: TulpenOne
+      fonts:
+        - asset: assets/fonts/TulpenOne-Regular.ttf
+    - family: Teko
+      fonts:
+        - asset: assets/fonts/Teko.ttf
+    - family: Doto
+      fonts:
+        - asset: assets/fonts/Doto.ttf
+    - family: SofiaSansExtraCondensed
+      fonts:
+        - asset: assets/fonts/SofiaSansExtraCondensed.ttf
+    - family: InstrumentSerif
+      fonts:
+        - asset: assets/fonts/InstrumentSerif-Regular.ttf
+    - family: Jost
+      fonts:
+        - asset: assets/fonts/Jost.ttf
+    - family: Phosphor
+      fonts:
+        - asset: assets/fonts/Phosphor-Bold.ttf
