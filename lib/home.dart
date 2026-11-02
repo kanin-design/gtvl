@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'apps.dart';
+import 'glow.dart';
 import 'menu.dart';
 import 'native.dart';
 import 'services.dart';
@@ -80,9 +79,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   /// 0: home, with the dock near the bottom. 1: all apps, the dock at the top.
   late final _page = AnimationController(vsync: this, duration: Look.medium);
   late final _eased = CurvedAnimation(parent: _page, curve: Curves.easeInOutCubic);
+
+  /// 1: the screensaver, with everything but the wallpaper out of sight.
+  late final _saver = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 800),
+    reverseDuration: Look.medium,
+  );
+  late final _saving = CurvedAnimation(parent: _saver, curve: Curves.easeInOutCubic);
+  late final _present = ReverseAnimation(_saving);
   final _dock = FocusScopeNode(debugLabel: 'dock');
   final _grid = FocusScopeNode(debugLabel: 'grid');
   final _gridScroll = ScrollController();
+  final _dockScroll = ScrollController();
   final _bar = FocusScopeNode(debugLabel: 'bar');
 
   /// The top bar is on screen: while it has focus.
@@ -96,9 +105,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String? _glowing;
   StreamSubscription<Object?>? _homeKey, _opens;
 
+  /// Where focus last was on this screen, and in the dock which app, by its place.
+  FocusScopeNode? _lastScope;
+  int _dockAt = 0;
+
+  /// Waiting to see whether focus has really gone nowhere.
+  Timer? _lost;
+
   @override
   void initState() {
     super.initState();
+    // The glow's shader: until it loads, the dock simply has no glow.
+    GlowShader.load().then((_) {
+      if (mounted) setState(() {});
+    });
     // Home pressed while already home: close menus, back to the dock.
     _homeKey = Native.events.where((event) => event['type'] == 'home').listen((_) => _goHome(closeMenus: true));
     // A remapped button asking for settings or all apps.
@@ -112,21 +132,92 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _enter(_grid);
       }
     });
+    s.saver.addListener(_onSaver);
+    s.apps.addListener(_checkFocus);
+    FocusManager.instance.addListener(_checkFocus);
   }
 
   @override
   void dispose() {
     _homeKey?.cancel();
     _opens?.cancel();
+    s.saver.removeListener(_onSaver);
+    s.apps.removeListener(_checkFocus);
+    FocusManager.instance.removeListener(_checkFocus);
+    _lost?.cancel();
     _eased.dispose();
     _page.dispose();
+    _saving.dispose();
+    _saver.dispose();
     _dock.dispose();
     _grid.dispose();
     _gridScroll.dispose();
+    _dockScroll.dispose();
     _bar.dispose();
     _barShown.dispose();
     _molten.dispose();
     super.dispose();
+  }
+
+  /// Everything closes and the dock waits, out of sight, for the button that
+  /// brings it back.
+  void _onSaver() {
+    if (s.saver.value) {
+      _goHome(closeMenus: true);
+      _saver.forward();
+    } else {
+      _saver.reverse();
+    }
+  }
+
+  /// An item is always in focus, or the remote does nothing. When a focused
+  /// item goes, Flutter falls back on whichever was focused before it, and
+  /// with none on the scope around it or the screen as a whole, where nothing
+  /// shows as selected and keys may reach no item. Focus also passes through
+  /// such places on its way between items, as a menu opens: focus still there
+  /// a moment later is lost.
+  void _checkFocus() {
+    if (!_noItem) return;
+    _lost ??= Timer(const Duration(milliseconds: 100), () {
+      _lost = null;
+      if (mounted && _noItem) _refocus();
+    });
+  }
+
+  /// A scope has focus, not an item in it. A level of settings with no rows
+  /// takes focus itself, so that Left still works there.
+  bool get _noItem => switch (FocusManager.instance.primaryFocus) {
+    final FocusScopeNode scope => _onTop || scope.traversalDescendants.isNotEmpty,
+    _ => false,
+  };
+
+  /// Focuses the nearest item: on the home screen in the place focus last was,
+  /// else on the screen over it the item focused last there, else its first.
+  void _refocus() {
+    if (!_onTop) {
+      final route = Navigator.of(context).focusNode.enclosingScope?.focusedChild;
+      if (route is! FocusScopeNode) return;
+      FocusNode? item = route;
+      while (item is FocusScopeNode) {
+        item = item.focusedChild;
+      }
+      (item ?? route.traversalDescendants.where((node) => node is! FocusScopeNode).firstOrNull)?.requestFocus();
+      return;
+    }
+    // The dock's first app takes focus as soon as the apps are known.
+    if (!s.apps.loaded) return;
+    if (_moving != null) setState(() => _moving = null);
+    final apps = s.apps.dock;
+    final last = _lastScope;
+    final item = last == null || last == _dock ? null : last.focusedChild ?? _topLeft(last);
+    if (item != null) {
+      item.requestFocus();
+      if (item.context case final context?) reveal(context);
+    } else if (apps.isNotEmpty) {
+      _focusTile(_dock, apps[_dockAt.clamp(0, apps.length - 1)].package);
+    } else {
+      _goHome();
+    }
   }
 
   /// Focuses the item last focused in [scope], or its top-left one; with
@@ -170,7 +261,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _goHome({bool closeMenus = false}) {
     if (closeMenus) Navigator.of(context).popUntil((route) => route.isFirst);
     if (_moving != null) setState(() => _moving = null);
-    _enter(s.apps.dock.isEmpty ? _grid : _dock);
+    final allGone = s.apps.loaded && s.apps.dock.isEmpty && _grid.traversalDescendants.isEmpty;
+    // With nothing in the dock or below it, the top bar's gear is always there.
+    _enter(allGone ? _bar : (s.apps.dock.isEmpty ? _grid : _dock));
   }
 
   static bool _isPress(KeyEvent event) => event is KeyDownEvent || event is KeyRepeatEvent;
@@ -304,14 +397,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               const Wallpaper(),
               // A light vignette under the dock, so it and its names hold on bright films.
-              const IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Color(0x00000000), Color(0x00000000), Color(0x40000000)],
-                      stops: [0, 0.5, 1],
+              IgnorePointer(
+                child: FadeTransition(
+                  opacity: _present,
+                  child: const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x00000000), Color(0x00000000), Color(0x40000000)],
+                        stops: [0, 0.5, 1],
+                      ),
                     ),
                   ),
                 ),
@@ -320,7 +416,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               IgnorePointer(
                 child: FadeTransition(
                   opacity: eased,
-                  child: const ColoredBox(color: Color(0x73000000)),
+                  child: FadeTransition(
+                    opacity: _present,
+                    child: const ColoredBox(color: Color(0x73000000)),
+                  ),
                 ),
               ),
               ListenableBuilder(
@@ -332,15 +431,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       right: 0,
                       top: g.gridTop,
                       bottom: 0,
-                      child: AnimatedBuilder(
-                        animation: eased,
-                        child: RepaintBoundary(child: _gridView(g)),
-                        // Below the screen while home; not painted at all until it moves.
-                        builder: (context, grid) => Opacity(
-                          opacity: eased.value == 0 ? 0 : 1,
-                          child: Transform.translate(
-                            offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
-                            child: grid,
+                      child: FadeTransition(
+                        opacity: _present,
+                        child: AnimatedBuilder(
+                          animation: eased,
+                          child: RepaintBoundary(child: _gridView(g)),
+                          // Below the screen while home; not painted at all until it moves.
+                          builder: (context, grid) => Opacity(
+                            opacity: eased.value == 0 ? 0 : 1,
+                            child: Transform.translate(
+                              offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
+                              child: grid,
+                            ),
                           ),
                         ),
                       ),
@@ -348,13 +450,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     Positioned(
                       left: 0,
                       right: 0,
-                      top: g.dockIdle,
-                      height: g.dockHeight,
+                      top: g.dockIdle - _bleedRoom,
+                      height: g.dockHeight + 2 * _bleedRoom,
                       child: AnimatedBuilder(
-                        animation: eased,
+                        animation: Listenable.merge([eased, _saving]),
                         child: RepaintBoundary(child: _dockBar(g)),
-                        builder: (context, dock) =>
-                            Transform.translate(offset: Offset(0, eased.value * (g.dockTop - g.dockIdle)), child: dock),
+                        // Off the bottom for the screensaver, not faded, which would stop its glass blurring.
+                        builder: (context, dock) => Transform.translate(
+                          offset: Offset(
+                            0,
+                            eased.value * (g.dockTop - g.dockIdle) +
+                                _saving.value * (g.height - g.dockIdle + _bleedRoom),
+                          ),
+                          child: Offstage(
+                            offstage: _saving.value == 1,
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: RepaintBoundary(child: _bleed(g, (1 - eased.value) * (1 - _saving.value))),
+                                ),
+                                Positioned(left: 0, right: 0, top: _bleedRoom, height: g.dockHeight, child: dock!),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                     Positioned(
@@ -362,20 +481,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       right: 0,
                       top: g.dockIdle - 48,
                       child: Center(
-                        child: ValueListenableBuilder<String?>(
-                          valueListenable: s.notice,
-                          builder: (context, notice, _) => AnimatedSwitcher(
-                            duration: Look.medium,
-                            switchInCurve: Look.ease,
-                            switchOutCurve: Curves.easeIn,
-                            child: switch ((_moving, notice)) {
-                              (_?, _) => const Pill(
-                                'Left and Right move the app · OK when done',
-                                key: ValueKey('move'),
-                              ),
-                              (_, final text?) => Pill(text, key: ValueKey(text)),
-                              _ => const SizedBox.shrink(),
-                            },
+                        child: FadeTransition(
+                          opacity: _present,
+                          child: ValueListenableBuilder<String?>(
+                            valueListenable: s.notice,
+                            builder: (context, notice, _) => AnimatedSwitcher(
+                              duration: Look.medium,
+                              switchInCurve: Look.ease,
+                              switchOutCurve: Curves.easeIn,
+                              child: switch ((_moving, notice)) {
+                                (_?, _) => const Pill(
+                                  'Left and Right move the app · OK when done',
+                                  key: ValueKey('move'),
+                                ),
+                                (_, final text?) => Pill(text, key: ValueKey(text)),
+                                _ => const SizedBox.shrink(),
+                              },
+                            ),
                           ),
                         ),
                       ),
@@ -383,12 +505,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ],
                 ),
               ),
-              // A shade behind the top bar while it shows, so the clock and icons read on bright films.
+              // A soft shade behind the time and date only, so they hold on bright film.
               Positioned(
-                left: 0,
                 right: 0,
                 top: 0,
-                height: g.height * 0.32,
+                width: 480,
+                height: 240,
                 child: IgnorePointer(
                   child: ValueListenableBuilder<bool>(
                     valueListenable: _barShown,
@@ -396,17 +518,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         AnimatedOpacity(opacity: shown ? 1 : 0, duration: Look.medium, child: shade),
                     child: const DecoratedBox(
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Color(0x80000000), Color(0x00000000)],
+                        gradient: RadialGradient(
+                          center: Alignment(0.22, -0.1),
+                          colors: [Color(0x66000000), Color(0x00000000)],
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-              Positioned(left: g.pad - 13, right: g.pad, top: g.height * 0.05, child: _topBar()),
+              // The icons' glyphs line up with the dock's first app.
+              Positioned(left: g.pad - (_chipGap + _chip - _glyph) / 2, right: g.pad, top: g.pad - 8, child: _topBar()),
             ],
           );
         },
@@ -419,14 +541,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final c = s.config;
     // The app the glow is under may have moved along, or another app gone.
     final glowing = apps.indexWhere((app) => app.package == _glowing);
-    if (glowing >= 0) _molten.focus(glowing);
+    if (glowing >= 0) {
+      _dockAt = glowing;
+      _molten.focus(glowing);
+    }
     final names = c.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, step) = _centres(g, apps.length, c.dockAlign);
+    // With the glow off, the apps take focus as they do elsewhere.
+    final look = GlowLook.of(c.dockGlow);
+    _molten.step = step;
+    if (look != null) _molten.look = look;
     return FocusScope(
       node: _dock,
       onKeyEvent: _onDockKey,
       onFocusChange: (focused) {
         if (focused) {
+          _lastScope = _dock;
           _page.reverse();
         } else {
           _glowing = null;
@@ -434,8 +564,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
       },
       child: Glass(
-        sigma: c.glassBlur,
-        tint: Color(c.glassTint).withValues(alpha: c.glassTintAlpha),
+        sigma: math.max(c.glassBlur, 16),
+        tint: const Color(0x801C1C1E),
         vibrancy: 1.35,
         child: CustomPaint(
           painter: _BandLight(line: c.lineWidth, alpha: c.lineAlpha),
@@ -449,6 +579,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               : FocusTraversalGroup(
                   policy: smoothTraversal,
                   child: SingleChildScrollView(
+                    controller: _dockScroll,
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
                     padding: EdgeInsets.symmetric(horizontal: g.pad - g.gap / 2),
@@ -457,15 +588,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       constraints: BoxConstraints(minWidth: g.width - 2 * g.pad + g.gap),
                       // The glow, behind the apps and moving along with them.
                       child: CustomPaint(
-                        painter: _MoltenPainter(
-                          _molten,
-                          first: first,
-                          step: step,
-                          tile: Size(g.tileWidth, g.tileHeight),
-                          radius: g.radius,
-                          raise: names / 2,
-                          ratio: MediaQuery.devicePixelRatioOf(context),
-                        ),
+                        painter: look == null
+                            ? null
+                            : _MoltenPainter(
+                                _molten,
+                                first: first,
+                                tile: Size(g.tileWidth, g.tileHeight),
+                                radius: g.radius,
+                                raise: names / 2,
+                                ratio: MediaQuery.devicePixelRatioOf(context),
+                              ),
                         child: Row(
                           mainAxisAlignment: _arrangements[c.dockAlign] ?? MainAxisAlignment.start,
                           children: [
@@ -486,12 +618,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     onKey: _moving == apps[i].package ? _onMoveKey : null,
                                     onLaunch: () => _launch(apps[i]),
                                     onMenu: () => _menu(apps[i]),
-                                    glow: _molten,
+                                    glow: look == null ? null : _molten,
                                     index: i,
-                                    onDown: _molten.press,
+                                    onDown: look == null ? null : _molten.press,
                                     onFocusChange: (focused) {
                                       if (!focused) return;
                                       _glowing = apps[i].package;
+                                      _dockAt = i;
                                       _molten.focus(i);
                                     },
                                   ),
@@ -522,6 +655,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     };
   }
 
+  /// Room above and below the dock for the light its lamp throws on the wallpaper.
+  static const _bleedRoom = 120.0;
+
+  /// The light the dock's lamp throws on the wallpaper round it, [fade]d as the dock slides away.
+  Widget _bleed(_Geometry g, double fade) {
+    if (GlowLook.of(s.config.dockGlow) == null) return const SizedBox.shrink();
+    final apps = s.apps.dock;
+    final names = s.config.dockNames ? _Geometry.labelHeight : 0.0;
+    final (first, _) = _centres(g, apps.length, s.config.dockAlign);
+    return CustomPaint(
+      painter: _BleedPainter(
+        _molten,
+        _dockScroll,
+        left: g.pad - g.gap / 2,
+        first: first,
+        tile: Size(g.tileWidth, g.tileHeight),
+        radius: g.radius,
+        raise: names / 2,
+        room: _bleedRoom,
+        fade: fade,
+        ratio: MediaQuery.devicePixelRatioOf(context),
+      ),
+    );
+  }
+
   /// How the dock spreads apps that fit, by its "arrange" setting.
   static const _arrangements = {
     'center': MainAxisAlignment.center,
@@ -544,7 +702,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       node: _grid,
       onKeyEvent: _onGridKey,
       onFocusChange: (focused) {
-        if (focused) _page.forward();
+        if (!focused) return;
+        _lastScope = _grid;
+        _page.forward();
       },
       child: FocusTraversalGroup(
         policy: smoothTraversal,
@@ -610,10 +770,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  /// A top icon's size, the gap between them, and the size of the glyph in one.
+  static const _chip = 40.0, _chipGap = 8.0, _glyph = 26.0;
+
   Widget _topBar() => FocusScope(
     node: _bar,
     onKeyEvent: _onBarKey,
-    onFocusChange: (focused) => _barShown.value = focused,
+    onFocusChange: (focused) {
+      _barShown.value = focused;
+      if (focused) _lastScope = _bar;
+    },
     child: ValueListenableBuilder<bool>(
       valueListenable: _barShown,
       builder: (context, shown, bar) => AnimatedOpacity(
@@ -636,17 +802,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Level with the icons' middles.
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Clock(h24: s.config.clock24),
-                ),
+                Clock(h24: s.config.clock24, face: s.config.clockFont),
                 ValueListenableBuilder<String?>(
                   valueListenable: s.caption,
                   builder: (context, caption, _) => caption == null || caption.isEmpty || !s.config.showCaption
                       ? const SizedBox.shrink()
                       : Padding(
-                          padding: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.only(top: 6),
                           child: Text(caption, style: Look.caption),
                         ),
                 ),
@@ -660,14 +822,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget? _topIcon(String id) {
     final hidden = s.config.topHidden.contains(id);
+    final glow = GlowLook.of(s.config.dockGlow) != null;
     switch (id) {
       case 'settings':
         // Always there so Up can reach it: a hidden gear shows only while
         // focused, so settings can never be locked away.
         return TopIcon(
           key: ValueKey(id),
-          icon: Icons.settings_outlined,
+          icon: Glyphs.gear,
           collapsed: hidden,
+          glow: glow,
           // An update waits in settings, under About.
           badge: s.updates.waiting,
           onPressed: () => showSettings(context),
@@ -676,6 +840,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return TopIcon(
           key: ValueKey(id),
           icon: s.status.networkIcon,
+          glow: glow,
           onPressed: () => Native.openSettings('android.settings.WIFI_SETTINGS'),
         );
       case 'vpn' when !hidden:
@@ -683,8 +848,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         if (app == null) return null;
         return TopIcon(
           key: ValueKey(id),
-          icon: s.status.vpn ? Icons.vpn_lock : Icons.vpn_lock_outlined,
-          dim: !s.status.vpn,
+          icon: s.status.vpn ? Glyphs.vpnOn : Glyphs.vpnOff,
+          glow: glow,
           onPressed: () async {
             if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.name}");
           },
@@ -694,22 +859,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-/// A top-bar icon. Focus brightens it and sets it on a soft round light.
+/// A top-bar icon, straight on the wallpaper. In focus it becomes a small dark
+/// tile in front of the dock's orange, as a dock app does.
 class TopIcon extends StatelessWidget {
   const TopIcon({
     super.key,
     required this.icon,
     required this.onPressed,
-    this.dim = false,
     this.collapsed = false,
     this.badge = false,
+    this.glow = true,
   });
 
   final IconData icon;
   final VoidCallback onPressed;
-
-  /// Drawn fainter, e.g. a VPN that is off.
-  final bool dim;
 
   /// Takes no space until focused.
   final bool collapsed;
@@ -717,101 +880,117 @@ class TopIcon extends StatelessWidget {
   /// A dot on its corner: something waits behind it.
   final bool badge;
 
+  /// The orange shows behind it in focus; the dock's glow setting.
+  final bool glow;
+
+  static const _chip = _HomeScreenState._chip;
+
+  /// How much a tile in focus is enlarged.
+  static const _lift = 1.08;
+
+  /// What the tile's edge catches of the orange behind it.
+  static final _rim = () {
+    final lamp = _chip / 2 * GlowLook.lampScale;
+    final light = GlowLook.rim * GlowHalo.look.light(_chip / 2 * _lift, 0, lamp, lamp, lamp);
+    final (r, g, b) = GlowLook.colour(1);
+    int channel(double c) => (255 * GlowLook.tone(light * c)).round();
+    return Color.fromARGB(255, channel(r), channel(g), channel(b));
+  }();
+
   @override
   Widget build(BuildContext context) => Pressable(
     onPressed: onPressed,
     builder: (context, focused) {
-      final icon = Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 3),
-        child: AnimatedScale(
-          scale: focused ? 1.08 : 1,
+      final tile = AnimatedScale(
+        scale: focused ? _lift : 1,
+        duration: Look.fast,
+        curve: Look.ease,
+        child: AnimatedContainer(
           duration: Look.fast,
           curve: Look.ease,
-          child: AnimatedContainer(
-            duration: Look.fast,
-            curve: Look.ease,
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: focused ? const Color(0x38FFFFFF) : const Color(0x00FFFFFF),
-              border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
+          width: _chip,
+          height: _chip,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: focused ? const Color(0xF21C1C1E) : const Color(0x001C1C1E),
+            border: Border.all(
+              color: !focused
+                  ? const Color(0x00FFFFFF)
+                  : glow
+                  ? _rim
+                  : Look.focusEdge,
             ),
-            child: Stack(
-              alignment: Alignment.center,
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  this.icon,
-                  size: 22,
-                  color: Look.white.withValues(alpha: focused ? 1 : (dim ? 0.55 : 0.85)),
-                  shadows: focused ? null : Look.shadow,
-                ),
-                if (badge) const Positioned(right: 7, top: 7, child: Badge()),
-              ],
-            ),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              Icon(
+                icon,
+                size: _HomeScreenState._glyph,
+                color: Look.white.withValues(alpha: focused ? 1 : 0.92),
+                shadows: focused ? null : Look.shadow,
+              ),
+              if (badge) const Positioned(right: 5, top: 5, child: Badge()),
+            ],
           ),
         ),
       );
-      if (!collapsed) return icon;
+      final item = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: _HomeScreenState._chipGap / 2),
+        child: !glow
+            ? tile
+            // On like a bulb as focus reaches it, out fast as focus leaves.
+            : TweenAnimationBuilder<double>(
+                tween: Tween(end: focused ? 1 : 0),
+                duration: focused ? const Duration(milliseconds: 80) : const Duration(milliseconds: 200),
+                child: tile,
+                builder: (context, heat, tile) => CustomPaint(
+                  painter: heat == 0
+                      ? null
+                      : _HaloPainter(
+                          heat,
+                          radius: _chip / 2 * GlowLook.lampScale,
+                          ratio: MediaQuery.devicePixelRatioOf(context),
+                        ),
+                  child: tile,
+                ),
+              ),
+      );
+      if (!collapsed) return item;
       return ClipRect(
-        child: Align(alignment: Alignment.centerLeft, widthFactor: focused ? 1 : 0, child: icon),
+        child: Align(alignment: Alignment.centerLeft, widthFactor: focused ? 1 : 0, child: item),
       );
     },
   );
 }
 
-/// The time, updated on the minute.
-class Clock extends StatefulWidget {
-  const Clock({super.key, required this.h24});
+/// Places the orange's one image, added to the wallpaper, at [heat].
+class _HaloPainter extends CustomPainter {
+  _HaloPainter(this.heat, {required this.radius, required this.ratio});
 
-  final bool h24;
-
-  @override
-  State<Clock> createState() => _ClockState();
-}
-
-class _ClockState extends State<Clock> {
-  Timer? _timer;
+  final double heat, radius, ratio;
 
   @override
-  void initState() {
-    super.initState();
-    _schedule();
-  }
-
-  void _schedule() {
-    _timer = Timer(Duration(seconds: 60 - DateTime.now().second), () {
-      if (!mounted) return;
-      setState(() {});
-      _schedule();
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final hour = widget.h24 ? now.hour.toString().padLeft(2, '0') : '${(now.hour + 11) % 12 + 1}';
-    return Text.rich(
-      TextSpan(
-        text: '$hour:${now.minute.toString().padLeft(2, '0')}',
-        children: [
-          if (!widget.h24)
-            TextSpan(
-              text: now.hour < 12 ? ' am' : ' pm',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xCCFFFFFF)),
-            ),
-        ],
-      ),
-      style: Look.clock,
+  void paint(Canvas canvas, Size size) {
+    final image = GlowHalo.image(radius, ratio);
+    if (image == null) return;
+    final (r, g, b) = GlowLook.fade(heat);
+    if (r <= 0) return;
+    final side = 2 * (radius + GlowHalo.reach);
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0, 0, side * ratio, side * ratio),
+      Rect.fromCenter(center: size.center(Offset.zero), width: side, height: side),
+      Paint()
+        ..blendMode = BlendMode.plus
+        ..filterQuality = FilterQuality.low
+        ..colorFilter = ColorFilter.mode(Color.from(alpha: r, red: 1, green: g / r, blue: b / r), BlendMode.modulate),
     );
   }
+
+  @override
+  bool shouldRepaint(_HaloPainter old) => old.heat != heat || old.radius != radius || old.ratio != ratio;
 }
 
 /// Light on the dock's glass, from above: an edge along its top, brightest a
@@ -854,10 +1033,11 @@ class _BandLight extends CustomPainter {
   bool shouldRepaint(_BandLight old) => old.line != line || old.alpha != alpha;
 }
 
-/// The dock's light: a hot glow in the glass behind the app in focus. It
-/// flows after focus to the next app, leaves an ember where it was that cools
-/// to red as it fades, and cools away when focus leaves the dock. It ticks
-/// only while something changes.
+/// The dock's light: a lamp in the glass behind the app in focus. It comes
+/// on behind an app as focus reaches it, as a bulb does, up through red in
+/// a blink; the one behind the app focus left goes out fast where it was,
+/// an ember, as the lamp does when focus leaves the dock. It ticks only
+/// while something changes.
 class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   _Molten(TickerProvider vsync) {
     _ticker = vsync.createTicker(_tick);
@@ -865,16 +1045,26 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
 
   late final Ticker _ticker;
   Duration? _last;
-  double _at = 0, _to = 0, _heat = 0, _hot = 0;
+  double _at = 0, _heat = 0, _hot = 0;
 
-  /// How fast the glow flows, in apps a second.
-  double speed = 0;
+  /// How fast a lamp comes on, and goes out (each an exponential rate, a second).
+  static const _on = 25.0, _out = 8.0;
 
-  /// Embers left where the glow was, as (place, heat).
+  /// Lamps going out where focus was, as (place, heat).
   final embers = <(double, double)>[];
 
   @override
-  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat);
+  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat, step, _look);
+
+  /// The look it is drawn in (the glow setting's step), set as the dock lays out.
+  GlowLook get look => _look;
+  GlowLook _look = GlowLook.steps.first;
+  set look(GlowLook look) {
+    if (look == _look) return;
+    _look = look;
+    // A tick shows it, on the tiles' edges too.
+    _start();
+  }
 
   /// OK is down on the app in focus: the glow flares while it is.
   void press(bool down) {
@@ -886,17 +1076,16 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   /// Focus is on the dock app at [index], or has left the dock (null).
   void focus(int? index) {
     final hot = index == null ? 0.0 : 1.0;
-    final to = index?.toDouble() ?? _to;
-    if (to == _to && hot == _hot) return;
-    if (index != null) {
-      if (_heat < 0.05) {
-        // Cold: it lights up where focus is, rather than flowing there.
-        _at = to;
-      } else if ((to - _to).abs() > 0.5) {
-        embers.add((_at, _heat * 0.85));
+    final at = index?.toDouble() ?? _at;
+    if (at == _at && hot == _hot) return;
+    if (at != _at) {
+      // The lamp behind the app left goes out there; the new app's comes on from dark.
+      if (_heat > 0.02) {
+        embers.add((_at, _heat));
         if (embers.length > 3) embers.removeAt(0);
       }
-      _to = to;
+      _at = at;
+      _heat = 0;
     }
     _hot = hot;
     _start();
@@ -911,113 +1100,63 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   void _tick(Duration now) {
     final dt = _last == null ? 1 / 60 : (now - _last!).inMicroseconds / 1e6;
     _last = now;
-    final was = _at;
-    _at += (_to - _at) * (1 - math.exp(-dt * 16));
-    speed = dt > 0 ? (_at - was) / dt : 0;
-    // Heats quickly, cools slowly.
-    _heat += (_hot - _heat) * (1 - math.exp(-dt * (_hot > _heat ? 12 : 3.5)));
+    _heat += (_hot - _heat) * (1 - math.exp(-dt * (_hot > _heat ? _on : _out)));
     for (var i = embers.length - 1; i >= 0; i--) {
       final (at, heat) = embers[i];
-      final cooler = heat * math.exp(-dt * 4.5);
-      if (cooler < 0.02) {
+      final cooler = heat * math.exp(-dt * _out);
+      if (cooler < 0.01) {
         embers.removeAt(i);
       } else {
         embers[i] = (at, cooler);
       }
     }
-    if ((_to - _at).abs() < 0.001 && (_hot - _heat).abs() < 0.002 && embers.isEmpty) {
-      _at = _to;
+    if ((_hot - _heat).abs() < 0.002 && embers.isEmpty) {
       _heat = _hot;
-      speed = 0;
       _ticker.stop();
     }
     notifyListeners();
   }
 
-  /// The halo round the lifted app, blurred once for its size (see [_Halo]).
-  _Halo? _halo;
+  /// Its light in the glass and on the wallpaper, drawn once for the dock
+  /// as it is (see GlowSprite), and again only when that changes.
+  GlowSprite? _glass, _wall;
 
-  _Halo halo(Size tile, double radius, double ratio) {
-    if (_halo case final halo? when halo.tile == tile && halo.radius == radius && halo.ratio == ratio) return halo;
-    _halo?.dispose();
-    return _halo = _Halo(tile, radius, ratio);
+  GlowSprite? glass(GlowKey key) => _glass = _sprite(_glass, key);
+  GlowSprite? wall(GlowKey key) => _wall = _sprite(_wall, key);
+
+  static GlowSprite? _sprite(GlowSprite? sprite, GlowKey key) {
+    if (sprite != null && sprite.key == key) return sprite;
+    sprite?.dispose();
+    return GlowSprite.draw(key);
   }
+
+  /// The distance from one app's centre to the next, set as the dock lays out.
+  double step = 0;
+
+  /// The lamps to draw, the one in focus first, along a row whose first app
+  /// is centred at [first]: each its centre and heat, and whether it is going
+  /// out.
+  List<Spot> spots(double first, double offset) => [
+    if (value case final glow?) (x: offset + first + glow.at * step, heat: glow.heat, ember: false),
+    for (final (at, heat) in embers) (x: offset + first + at * step, heat: heat, ember: true),
+  ];
 
   @override
   void dispose() {
     _ticker.dispose();
-    _halo?.dispose();
+    _glass?.dispose();
+    _wall?.dispose();
     super.dispose();
   }
 }
 
-/// The halo round a lifted app of one size: light bleeding round its edges,
-/// a wide orange glow and a tight white-hot one, blurred once into images in
-/// the colours of a full glow, which the painter fades with the heat.
-/// Blurring it afresh on every frame cost a TV's GPU more than all the rest
-/// of the dock together.
-class _Halo {
-  _Halo(this.tile, this.radius, this.ratio)
-    : layers = [
-        for (final (grow, blur, depth, opacity) in _layers)
-          _blurred(tile, radius, ratio, grow, blur, molten(1, depth: depth, opacity: opacity)),
-      ];
-
-  /// Each layer: how far it reaches past the lifted tile, its blur, and its
-  /// colour, as [molten]'s depth and opacity.
-  static const _layers = [(12.0, 24.0, 0.45, 0.7), (3.0, 7.0, 0.08, 0.9)];
-
-  final Size tile;
-  final double radius, ratio;
-  final List<ui.Image> layers;
-
-  /// A rounded rectangle of [colour], [grow] larger than the lifted tile,
-  /// blurred by [blur], centred in an image with room for the blur, at the
-  /// screen's [ratio] of pixels.
-  static ui.Image _blurred(Size tile, double radius, double ratio, double grow, double blur, Color colour) {
-    final lifted = Size(tile.width * 1.12, tile.height * 1.12);
-    final margin = grow + blur * 3;
-    final size = Size(lifted.width + 2 * margin, lifted.height + 2 * margin);
-    final recorder = ui.PictureRecorder();
-    Canvas(recorder)
-      ..scale(ratio)
-      ..drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(
-            center: size.center(Offset.zero),
-            width: lifted.width + 2 * grow,
-            height: lifted.height + 2 * grow,
-          ),
-          Radius.circular(radius * 1.12 + grow),
-        ),
-        Paint()
-          ..color = colour
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur),
-      );
-    final picture = recorder.endRecording();
-    final image = picture.toImageSync((size.width * ratio).ceil(), (size.height * ratio).ceil());
-    picture.dispose();
-    return image;
-  }
-
-  void dispose() {
-    for (final image in layers) {
-      image.dispose();
-    }
-  }
-}
-
 /// Paints the dock's glow in the row of apps' own space, so it scrolls with
-/// them. The glass lights up as if a lamp burned inside it, behind the app in
-/// focus: the frosted glass glows around it, a fine filament of light runs
-/// along the line and shows between the apps, light bleeds round the app's
-/// edges, and the glass's top and bottom edges carry the light furthest.
-/// Embers glow less, and without a filament.
+/// them: a lamp behind the frosted glass under the app in focus, and its
+/// embers (see glow.dart). The band fills the painter's height.
 class _MoltenPainter extends CustomPainter {
   _MoltenPainter(
     this.light, {
     required this.first,
-    required this.step,
     required this.tile,
     required this.radius,
     required this.raise,
@@ -1026,148 +1165,110 @@ class _MoltenPainter extends CustomPainter {
 
   final _Molten light;
 
-  /// The first app's centre, and the distance from one app's to the next.
-  final double first, step;
+  /// The first app's centre, the apps' tile size and corner radius.
+  final double first;
   final Size tile;
   final double radius;
 
   /// How far above the middle the tiles sit, making room for names.
   final double raise;
 
-  /// The screen's pixels to a logical one, for the halo's images.
+  /// The screen's pixels to a dp, for the glow's images.
   final double ratio;
-
-  static const _none = Color(0x00000000);
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (final (at, heat) in light.embers) {
-      _spot(canvas, size, first + at * step, heat, 1, ember: true);
+    final spots = light.spots(first, 0);
+    if (spots.isEmpty) return;
+    final sprite = light.glass((
+      look: light.look,
+      hw: tile.width * GlowLook.lampScale / 2,
+      hh: tile.height * GlowLook.lampScale / 2,
+      r: radius * GlowLook.lampScale,
+      height: size.height,
+      y: size.height / 2 - raise,
+      top: 0,
+      bottom: size.height,
+      wallpaper: false,
+      ratio: ratio,
+    ));
+    for (final spot in spots) {
+      sprite?.place(canvas, spot.x, 0, heat: spot.heat, ember: spot.ember);
     }
-    if (light.value case final glow?) {
-      final stretch = 1 + 0.35 * (light.speed.abs() / 10).clamp(0.0, 1.0);
-      _spot(canvas, size, first + glow.at * step, glow.heat, stretch);
-    }
-  }
-
-  /// The light at [x]: an [ember] is only the glass still warm, with no
-  /// filament and no halo round the app.
-  void _spot(Canvas canvas, Size size, double x, double heat, double stretch, {bool ember = false}) {
-    final centre = Offset(x, size.height / 2 - raise);
-    final glass = size.height;
-    // The frosted glass lit from within: brightest round the app, and
-    // carried a long way along the line.
-    _pool(
-      canvas,
-      centre,
-      tile.width * 4.2 * stretch,
-      glass,
-      [
-        molten(heat, depth: 0.3, opacity: 0.55 * heat),
-        molten(heat, depth: 0.6, opacity: 0.3 * heat),
-        molten(heat, depth: 0.9, opacity: 0.09 * heat),
-        _none,
-      ],
-      const [0, 0.22, 0.55, 1],
-    );
-    if (!ember) {
-      // Light bleeding round the app's edges: a wide orange glow, then a
-      // tight one, white-hot, just past the lifted tile, drawn out a little
-      // the way it flows. Each is one image, faded with the heat.
-      final faded = Paint()
-        ..color = Color.fromRGBO(0, 0, 0, heat.clamp(0.0, 1.0))
-        ..blendMode = BlendMode.plus
-        ..filterQuality = FilterQuality.low;
-      for (final image in light.halo(tile, radius, ratio).layers) {
-        canvas.drawImageRect(
-          image,
-          Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
-          Rect.fromCenter(
-            center: centre,
-            width: image.width / ratio + tile.width * 1.12 * (stretch - 1),
-            height: image.height / ratio,
-          ),
-          faded,
-        );
-      }
-    }
-    if (!ember) {
-      // A fine filament of light through the glass, level with the apps'
-      // middles: it shows in the gaps between them, fading along the line.
-      for (final (high, depth, opacity) in [(7.0, 0.5, 0.4), (1.6, 0.05, 0.8)]) {
-        _pool(
-          canvas,
-          centre,
-          tile.width * 4.5 * stretch,
-          high,
-          [
-            molten(heat, depth: depth, opacity: opacity * heat),
-            molten(heat, depth: depth + 0.4, opacity: 0.3 * opacity * heat),
-            _none,
-          ],
-          const [0, 0.35, 1],
-        );
-      }
-    }
-    // The glass's edges carry the light furthest, the top more than the
-    // bottom: hottest right over the app, then a long tail along the line.
-    for (final (y, strength) in [(1.0, 1.0), (glass - 1, 0.75)]) {
-      final line = Rect.fromCenter(center: Offset(x, y), width: tile.width * 10, height: 2);
-      final tail = molten(heat, depth: 0.75, opacity: 0.3 * heat * strength);
-      canvas.drawRect(
-        line,
-        Paint()
-          ..blendMode = BlendMode.plus
-          ..shader = LinearGradient(
-            colors: [
-              _none,
-              tail,
-              molten(heat, depth: 0.12, opacity: heat * strength),
-              tail,
-              _none,
-            ],
-            stops: const [0, 0.36, 0.5, 0.64, 1],
-          ).createShader(line),
-      );
-    }
-  }
-
-  /// A soft oval of light, [across] wide and [high] tall from its centre,
-  /// [colours] running from the centre outward, added to the glass. Only
-  /// gradients and the rounded rectangles' own fast blur draw the glow, as a
-  /// TV under a moving wallpaper redraws it every frame.
-  static void _pool(
-    Canvas canvas,
-    Offset centre,
-    double across,
-    double high,
-    List<Color> colours, [
-    List<double>? stops,
-  ]) {
-    canvas
-      ..save()
-      ..translate(centre.dx, centre.dy)
-      ..scale(across / high, 1)
-      ..drawCircle(
-        Offset.zero,
-        high,
-        Paint()
-          ..blendMode = BlendMode.plus
-          ..shader = RadialGradient(
-            colors: colours,
-            stops: stops,
-          ).createShader(Rect.fromCircle(center: Offset.zero, radius: high)),
-      )
-      ..restore();
   }
 
   @override
   bool shouldRepaint(_MoltenPainter old) =>
       old.light != light ||
       old.first != first ||
-      old.step != step ||
       old.tile != tile ||
       old.radius != radius ||
       old.raise != raise ||
+      old.ratio != ratio;
+}
+
+/// Paints the light the dock's lamp throws on the wallpaper above and below
+/// it, under the dock (whose glass softens what of it lies behind), following
+/// the dock's apps as they scroll. [room] is the room above and below the
+/// band; [fade] dims it as the dock slides away.
+class _BleedPainter extends CustomPainter {
+  _BleedPainter(
+    this.light,
+    this.scroll, {
+    required this.left,
+    required this.first,
+    required this.tile,
+    required this.radius,
+    required this.raise,
+    required this.room,
+    required this.fade,
+    required this.ratio,
+  }) : super(repaint: Listenable.merge([light, scroll]));
+
+  final _Molten light;
+  final ScrollController scroll;
+
+  /// Where the row of apps starts, and its first app's centre in it.
+  final double left, first;
+  final Size tile;
+  final double radius, raise, room, fade;
+
+  /// The screen's pixels to a dp; the wallpaper's light, being soft, is
+  /// drawn at half of them (fewer blur its sharp edge at the dock's).
+  final double ratio;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (fade <= 0) return;
+    final spots = light.spots(first, left - (scroll.hasClients ? scroll.offset : 0));
+    if (spots.isEmpty) return;
+    final sprite = light.wall((
+      look: light.look,
+      hw: tile.width * GlowLook.lampScale / 2,
+      hh: tile.height * GlowLook.lampScale / 2,
+      r: radius * GlowLook.lampScale,
+      height: size.height,
+      y: size.height / 2 - raise,
+      top: room,
+      bottom: size.height - room,
+      wallpaper: true,
+      ratio: ratio / 2,
+    ));
+    for (final spot in spots) {
+      sprite?.place(canvas, spot.x, 0, heat: spot.heat, ember: spot.ember, opacity: fade);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BleedPainter old) =>
+      old.light != light ||
+      old.scroll != scroll ||
+      old.left != left ||
+      old.first != first ||
+      old.tile != tile ||
+      old.radius != radius ||
+      old.raise != raise ||
+      old.room != room ||
+      old.fade != fade ||
       old.ratio != ratio;
 }

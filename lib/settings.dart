@@ -45,6 +45,14 @@ const _qualities = [('1080p', '1080p'), ('1080p_hdr', '1080p HDR'), ('4k', '4K')
 const _speeds = [(0.5, 'Half'), (0.75, 'Three quarters'), (1.0, 'Normal')];
 const _nextFilm = [(0, 'When a film ends'), (2, 'Every 2 minutes'), (5, 'Every 5 minutes'), (10, 'Every 10 minutes')];
 const _dimming = [(0.0, 'None'), (0.1, 'Light'), (0.2, 'Medium'), (0.35, 'Strong')];
+const _saverAfter = [
+  (0, 'Off'),
+  (5, 'After 5 minutes'),
+  (10, 'After 10 minutes'),
+  (20, 'After 20 minutes'),
+  (30, 'After 30 minutes'),
+  (60, 'After 1 hour'),
+];
 const _sizes = [('xs', 'Extra small'), ('s', 'Small'), ('m', 'Medium'), ('l', 'Large'), ('xl', 'Extra large')];
 const _shapes = [('wide', 'Wide banners'), ('square', 'Square icons')];
 const _arrangements = [
@@ -67,6 +75,7 @@ const _tints = [
 const _tintStrengths = [(0.0, 'Clear'), (0.05, 'Light'), (0.08, 'Medium'), (0.16, 'Strong'), (0.32, 'Dense')];
 const _lineWidths = [(0.0, 'None'), (1.0, 'Hairline'), (1.5, 'Thin'), (2.5, 'Bold')];
 const _lineBrightness = [(0.06, 'Faint'), (0.12, 'Soft'), (0.24, 'Bright'), (0.45, 'White')];
+const _glows = [(0, 'Off'), (1, '1'), (2, '2'), (3, '3')];
 const _sceneNames = {'space': 'Space', 'underwater': 'Underwater', 'cities': 'Cities', 'landscapes': 'Landscapes'};
 const _iconNames = {'settings': 'Settings', 'network': 'Network', 'vpn': 'VPN'};
 
@@ -544,6 +553,30 @@ class _SettingsPanelState extends State<SettingsPanel> {
         value: _label(_dimming, c.dimming),
         chevron: true,
         onPressed: () => _choose('Dimming', _dimming, () => c.dimming, (v) => c.dimming = v),
+      ),
+      _Row(
+        'Screensaver',
+        value: _label(_saverAfter, c.saverMinutes),
+        chevron: true,
+        onPressed: () async {
+          final sleep = await Native.sleepAfter();
+          if (!mounted) return;
+          _choose(
+            'Screensaver',
+            _saverAfter,
+            () => c.saverMinutes,
+            (v) {
+              c.saverMinutes = v;
+              Native.saverAfter(v);
+            },
+            // Rows for times the TV never reaches stay, greyed out, with the reason below.
+            enabled: sleep == null ? null : (int v) => v < sleep,
+            note:
+                'With no button pressed for this long, only the wallpaper stays on screen. Any button brings the dock '
+                'back. A gradient or a single picture gives way to Apple aerials.'
+                '${sleep == null || sleep > _saverAfter.last.$1 ? '' : ' This TV goes to sleep after $sleep minutes, which Android settings can change.'}',
+          );
+        },
       ),
     ];
   }
@@ -1101,6 +1134,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
           c.changed();
         },
       ),
+      _Row(
+        'Glow',
+        value: _label(_glows, c.dockGlow),
+        chevron: true,
+        onPressed: () => _choose(
+          'Glow',
+          _glows,
+          () => c.dockGlow,
+          (v) => c.dockGlow = v,
+          note: 'How brightly the glass glows behind the app in focus: 1 is the faintest, 3 the brightest.',
+        ),
+      ),
       _Row('Glass', chevron: true, onPressed: () => _push(_Page('Glass', _glassRows))),
       const _Note('Size, shape, spacing and corners apply in the dock and in All apps.'),
     ];
@@ -1242,6 +1287,32 @@ class _SettingsPanelState extends State<SettingsPanel> {
     ];
   }
 
+  /// The faces, with the clock itself under them: settings hide it on the home screen.
+  List<Widget> _clockFontRows() {
+    final c = s.config;
+    return [
+      for (final face in ClockFace.all)
+        _Row(
+          face.label,
+          checked: face.id == c.clockFont,
+          onPressed: () {
+            c.clockFont = face.id;
+            c.changed();
+          },
+        ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 22, 14, 8),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Clock(h24: c.clock24, face: c.clockFont),
+          ),
+        ),
+      ),
+    ];
+  }
+
   List<Widget> _topBarRows() {
     final c = s.config;
     final vpnApps = s.status.vpnApps;
@@ -1262,6 +1333,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
           ),
         ),
       const _Header('Clock'),
+      _Row(
+        'Clock font',
+        value: _short(ClockFace.of(c.clockFont).label),
+        chevron: true,
+        onPressed: () => _push(_Page('Clock font', _clockFontRows), focus: ClockFace.of(c.clockFont).label),
+      ),
       _Row(
         '24-hour clock',
         toggle: c.clock24,

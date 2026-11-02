@@ -28,12 +28,14 @@ class Config extends ChangeNotifier {
       topHidden = {...v.strings('topHidden')},
       vpnApp = v.get('vpnApp'),
       clock24 = v.get('clock24'),
+      clockFont = v.get('clockFont'),
       showCaption = v.get('showCaption'),
       aerialsOff = {...v.strings('aerialsOff')},
       aerialSpeed = v.number('aerialSpeed'),
       aerialMinutes = v.get('aerialMinutes'),
       aerialCache = v.get('aerialCache'),
       dimming = v.number('dimming'),
+      saverMinutes = v.get('saverMinutes'),
       glassBlur = v.number('glassBlur'),
       glassTint = v.get('glassTint'),
       glassTintAlpha = v.number('glassTintAlpha'),
@@ -46,6 +48,7 @@ class Config extends ChangeNotifier {
       dockNames = v.get('dockNames'),
       tileShape = v.get('tileShape'),
       dockAlign = v.get('dockAlign'),
+      dockGlow = v.get('dockGlow'),
       remotes = v.map('remotes'),
       showsOff = {...v.strings('showsOff')},
       autoUpdate = v.get('autoUpdate');
@@ -88,6 +91,9 @@ class Config extends ChangeNotifier {
   String? vpnApp;
   bool clock24;
 
+  /// The clock's face, by its id in ClockFace.all.
+  String clockFont;
+
   /// The wallpaper's location, under the clock.
   bool showCaption;
 
@@ -103,6 +109,9 @@ class Config extends ChangeNotifier {
 
   /// Darkens the wallpaper, 0 to 1.
   double dimming;
+
+  /// The screensaver shows after this many minutes with no button pressed; 0 never.
+  int saverMinutes;
 
   /// The dock's glass: blur radius (0 for none), tint colour and strength, and
   /// the lines along its edges (width 0 for none).
@@ -130,6 +139,10 @@ class Config extends ChangeNotifier {
   /// How the dock spreads its apps when they fit: start, center, evenly
   /// (equal gaps, ends too) or between (first and last at the edges).
   String dockAlign;
+
+  /// How strongly the glass glows behind the dock app in focus: 0 for no
+  /// glow, else a level of GlowLook.steps from 1, the faintest.
+  int dockGlow;
 
   /// What the remote's buttons do instead, by remote (see Remaps).
   final Map<String, Object?> remotes;
@@ -175,12 +188,14 @@ class Config extends ChangeNotifier {
     'topHidden': topHidden.toList(),
     'vpnApp': vpnApp,
     'clock24': clock24,
+    'clockFont': clockFont,
     'showCaption': showCaption,
     'aerialsOff': aerialsOff.toList(),
     'aerialSpeed': aerialSpeed,
     'aerialMinutes': aerialMinutes,
     'aerialCache': aerialCache,
     'dimming': dimming,
+    'saverMinutes': saverMinutes,
     'glassBlur': glassBlur,
     'glassTint': glassTint,
     'glassTintAlpha': glassTintAlpha,
@@ -193,6 +208,7 @@ class Config extends ChangeNotifier {
     'dockNames': dockNames,
     'tileShape': tileShape,
     'dockAlign': dockAlign,
+    'dockGlow': dockGlow,
     'remotes': remotes,
     'showsOff': showsOff.toList(),
     'autoUpdate': autoUpdate,

@@ -19,6 +19,7 @@
   "topHidden": [],
   "vpnApp": null,
   "clock24": true,
+  "clockFont": "poiret",
   "showCaption": true,
   "aerialsOff": [
     "space",
@@ -29,6 +30,7 @@
   "aerialMinutes": 0,
   "aerialCache": true,
   "dimming": 0.0,
+  "saverMinutes": 20,
   "glassBlur": 8.0,
   "glassTint": 4284107310,
   "glassTintAlpha": 0.08,
@@ -41,6 +43,7 @@
   "dockNames": false,
   "tileShape": "square",
   "dockAlign": "start",
+  "dockGlow": 2,
   "remotes": {},
   "showsOff": [],
   "autoUpdate": true

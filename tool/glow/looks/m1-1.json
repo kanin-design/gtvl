@@ -1,0 +1,13 @@
+{
+ "about": "Step 1 of 6 of M1 lit brighter: M1 plus the light from behind the glass (K0) at 0.069 of its own strength, as a glowing tube behind the glass would add it (ladder.py).",
+ "mix": [
+  [
+   "m1",
+   1.0
+  ],
+  [
+   "k0",
+   0.069
+  ]
+ ]
+}

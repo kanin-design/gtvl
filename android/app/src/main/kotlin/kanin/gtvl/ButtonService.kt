@@ -67,7 +67,10 @@ class ButtonService : AccessibilityService() {
         onChange?.invoke()
     }
 
-    override fun onKeyEvent(event: KeyEvent): Boolean {
+    override fun onKeyEvent(event: KeyEvent): Boolean = keep(event).also { if (it) onKept?.invoke() }
+
+    /** Whether [event] stops here, and never reaches the app in front. */
+    private fun keep(event: KeyEvent): Boolean {
         if (event.isPrintingKey || event.keyCode in untouchable) return false
         val key = keyName(event)
         if (key == swallow) {
@@ -273,6 +276,9 @@ class ButtonService : AccessibilityService() {
 
         /** Told when the service turns on or off. */
         var onChange: (() -> Unit)? = null
+
+        /** Told when a button stops here, which GTVL then never sees. */
+        var onKept: (() -> Unit)? = null
 
         /** The remaps in use: config.json's at first, then each new set GTVL hands over. */
         var remaps: Remaps? = null

@@ -14,6 +14,11 @@ files are smaller builds for 64-bit and 32-bit Android.
   video loops seamlessly, for a set time when there are several); or a
   gradient. HDR films play on the TV's own video layer, in Dolby Vision where
   the TV shows it.
+- **Screensaver:** after a while with no button pressed (20 minutes unless
+  changed, under Settings › Wallpaper), only the wallpaper stays on screen. A
+  gradient or a single picture gives way to Apple aerials meanwhile. Any button
+  brings the dock back and does nothing else. It takes the place of Android's
+  own screensaver while GTVL is on screen; the TV still sleeps at its own time.
 - **Dock:** a full-width glass bar of favourite apps, lit from within behind
   the app in focus; Down shows all other apps.
   Apps show as wide TV banners or square icons, in five sizes, with
@@ -23,7 +28,8 @@ files are smaller builds for 64-bit and 32-bit Android.
   in with a code at plex.tv/link) and from apps that share rows with the home
   screen, such as HBO Max and NRK TV, between the dock and all apps.
 - **Top bar:** hidden until Up, which moves into it. Settings, network and
-  VPN icons, each optional and reorderable, plus the clock.
+  VPN icons, each optional and reorderable, with the dock's orange glow behind
+  the icon in focus, plus the time and date in your choice of eight typefaces.
 - **Updates:** GTVL finds new versions in this repository's latest release,
   downloads the APK for the TV and checks it (size, SHA-256, that it is GTVL,
   newer, and signed with the same key) before Android installs it. With
@@ -83,7 +89,8 @@ in `ui.dart`.
 their tiles, launches them, and reports app, network and VPN changes;
 `AppRows.kt` reads the rows other apps share; `HdrDeck.kt` plays HDR films
 on a video layer beneath the screen; `ButtonService.kt`, an accessibility
-service, remaps the remote's buttons; `Updater.kt` checks a downloaded update
+service, remaps the remote's buttons; `Idle.kt` says when no button has been
+pressed, for the screensaver; `Updater.kt` checks a downloaded update
 and hands it to Android's installer; `Launch.kt` starts apps.
 
 ## Config
@@ -103,5 +110,9 @@ gallery shows the file's name, so `arc-fold.mp4` reads "Arc fold".
 
 Aerial films by Apple. The film list comes from the
 [Overflight](https://github.com/spocky/projectivy-plugin-wallpaper-overflight)
-project (Apache-2.0). The typeface is [Inter](https://github.com/rsms/inter),
-under the SIL Open Font License (`assets/fonts/OFL.txt`).
+project (Apache-2.0). The UI's typeface is [Inter](https://github.com/rsms/inter). The clock's are
+Poiret One, Big Shoulders Display, Tulpen One, Teko, Doto, Sofia Sans Extra
+Condensed, Instrument Serif and Jost. All are under the SIL Open Font License
+(`assets/fonts/OFL*.txt`). The top bar's icons are
+[Phosphor](https://phosphoricons.com), under the MIT License
+(`assets/fonts/LICENSE-Phosphor.txt`).

@@ -68,6 +68,9 @@ class MainActivity : FlutterActivity() {
     /** HDR wallpaper films, on a video layer beneath GTVL's screen. */
     private val deck by lazy { HdrDeck(this) { events?.success(it) } }
 
+    /** When no button has been pressed for a while, for the screensaver. */
+    private val idle by lazy { Idle(this) { events?.success(it) } }
+
     private val updater by lazy { Updater(this) }
     private val prefs by lazy { Updater.prefs(this) }
 
@@ -147,6 +150,11 @@ class MainActivity : FlutterActivity() {
                     deck.stop()
                     result.success(null)
                 }
+                "saverAfter" -> {
+                    idle.set((call.arguments as Number).toInt())
+                    result.success(null)
+                }
+                "sleepAfter" -> result.success(idle.sleepAfter())
                 "updateInfo" -> result.success(updater.about())
                 "checkUpdate" -> inBackground(result) {
                     updater.check(call.argument("path")!!, call.argument<Number>("size")!!.toLong(), call.argument("sha256")!!)
@@ -171,6 +179,7 @@ class MainActivity : FlutterActivity() {
             override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
                 events = sink
                 ButtonService.onChange = buttonsChanged
+                ButtonService.onKept = buttonKept
                 UpdateReceiver.onStatus = updateStatus
                 launcherApps.registerCallback(appsCallback, mainThread)
                 connectivity.registerDefaultNetworkCallback(networkCallback, mainThread)
@@ -181,6 +190,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private val buttonsChanged: () -> Unit = { events?.success(mapOf("type" to "buttons")) }
+    private val buttonKept: () -> Unit = { idle.touch() }
     private val updateStatus: (Map<String, Any?>) -> Unit = { events?.success(it) }
 
     /** Also when the activity goes, as Flutter then never cancels the events. */
@@ -189,6 +199,7 @@ class MainActivity : FlutterActivity() {
         launcherApps.unregisterCallback(appsCallback)
         connectivity.unregisterNetworkCallback(networkCallback)
         if (ButtonService.onChange === buttonsChanged) ButtonService.onChange = null
+        if (ButtonService.onKept === buttonKept) ButtonService.onKept = null
         if (UpdateReceiver.onStatus === updateStatus) UpdateReceiver.onStatus = null
         events = null
     }
@@ -268,12 +279,19 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         showing = true
         underScreensaver = false
+        idle.resume()
     }
 
     override fun onPause() {
         super.onPause()
         showing = false
         hiddenAt = SystemClock.elapsedRealtime()
+        idle.pause()
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        idle.touch()
     }
 
     /**
@@ -284,6 +302,7 @@ class MainActivity : FlutterActivity() {
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        idle.touch()
         if (intent.hasCategory(Intent.CATEGORY_HOME)) {
             if (giveBack) {
                 keepGiveBack(false)
@@ -604,7 +623,7 @@ class MainActivity : FlutterActivity() {
                 prefs.edit().putStringSet(USED_REMOTES, usedRemotes.toSet()).apply()
             }
         }
-        return super.dispatchKeyEvent(event)
+        return idle.swallow(event) || super.dispatchKeyEvent(event)
     }
 
     /**

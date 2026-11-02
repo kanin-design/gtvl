@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui' show FontFeature, ImageFilter;
+import 'dart:ui' show FontFeature, FontVariation, ImageFilter;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -36,14 +36,218 @@ abstract final class Look {
 
   /// Digits that keep their width, so the time and percentages don't jiggle.
   static const figures = [FontFeature.tabularFigures()];
-  static const clock = TextStyle(
-    fontSize: 22,
-    color: white,
-    fontWeight: FontWeight.w600,
-    shadows: shadow,
-    fontFeatures: figures,
-  );
+
   static const caption = TextStyle(fontSize: 13, color: Color(0xCCFFFFFF), shadows: shadow);
+}
+
+/// A face the clock can wear. Each is sized so its digits stand the same
+/// height, whatever its own proportions: [time] and [date] are font sizes,
+/// [timeTop] and [dateTop] how far below the top of their line the digits start.
+class ClockFace {
+  const ClockFace(
+    this.id,
+    this.label,
+    this.family, {
+    required this.time,
+    required this.timeTop,
+    required this.date,
+    required this.dateTop,
+    this.timeAxes = const [],
+    this.dateAxes = const [],
+  });
+
+  final String id, label, family;
+  final double time, timeTop, date, dateTop;
+  final List<FontVariation> timeAxes, dateAxes;
+
+  /// How tall the digits stand, in the time and the date, and the gap between.
+  static const digits = 74.0, dateDigits = 17.0, gap = 11.0;
+
+  /// Poiret One first: the default.
+  static const all = [
+    ClockFace('poiret', 'Poiret One', 'PoiretOne', time: 96, timeTop: 5.8, date: 22.4, dateTop: 1.4),
+    ClockFace(
+      'shoulders',
+      'Big Shoulders Display',
+      'BigShouldersDisplay',
+      time: 90.9,
+      timeTop: 1.4,
+      date: 21.1,
+      dateTop: 0.3,
+      timeAxes: [FontVariation('wght', 400)],
+      dateAxes: [FontVariation('wght', 400)],
+    ),
+    ClockFace('tulpen', 'Tulpen One', 'TulpenOne', time: 105.7, timeTop: 10.7, date: 24.6, dateTop: 2.5),
+    ClockFace(
+      'teko',
+      'Teko Light',
+      'Teko',
+      time: 119,
+      timeTop: 5.5,
+      date: 27.2,
+      dateTop: 1.2,
+      timeAxes: [FontVariation('wght', 300)],
+      dateAxes: [FontVariation('wght', 400)],
+    ),
+    ClockFace(
+      'doto',
+      'Doto',
+      'Doto',
+      time: 95.5,
+      timeTop: 9.9,
+      date: 24.7,
+      dateTop: 2.6,
+      timeAxes: [FontVariation('ROND', 100), FontVariation('wght', 700)],
+      dateAxes: [FontVariation('ROND', 100), FontVariation('wght', 700)],
+    ),
+    ClockFace(
+      'sofia',
+      'Sofia Sans Extra Condensed',
+      'SofiaSansExtraCondensed',
+      time: 110.9,
+      timeTop: 9.9,
+      date: 25.7,
+      dateTop: 2.3,
+      timeAxes: [FontVariation('wght', 300)],
+      dateAxes: [FontVariation('wght', 400)],
+    ),
+    ClockFace('instrument', 'Instrument Serif', 'InstrumentSerif', time: 99.3, timeTop: 2.6, date: 23.3, dateTop: 0.7),
+    ClockFace(
+      'jost',
+      'Jost Light',
+      'Jost',
+      time: 102.2,
+      timeTop: 3,
+      date: 23.9,
+      dateTop: 0.7,
+      timeAxes: [FontVariation('wght', 300)],
+      dateAxes: [FontVariation('wght', 400)],
+    ),
+  ];
+
+  static ClockFace of(String id) => all.firstWhere((face) => face.id == id, orElse: () => all.first);
+}
+
+/// The time and, under it, the date, updated on the minute.
+class Clock extends StatefulWidget {
+  const Clock({super.key, required this.h24, required this.face});
+
+  final bool h24;
+
+  /// Its face, by its id in ClockFace.all.
+  final String face;
+
+  @override
+  State<Clock> createState() => _ClockState();
+}
+
+class _ClockState extends State<Clock> {
+  static const _days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  static const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  /// Two soft shadows, so the time and date hold on bright film without a plate.
+  static const _shadows = [
+    Shadow(color: Color(0x73000000), blurRadius: 3, offset: Offset(0, 1)),
+    Shadow(color: Color(0x59000000), blurRadius: 18),
+  ];
+
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  void _schedule() {
+    _timer = Timer(Duration(seconds: 60 - DateTime.now().second), () {
+      if (!mounted) return;
+      setState(() {});
+      _schedule();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  /// A line of text taking up only its digits' height, from their top.
+  Widget _line(InlineSpan text, {required double size, required double top, required double digits}) => Align(
+    alignment: Alignment.topRight,
+    widthFactor: 1,
+    heightFactor: digits / size,
+    child: Transform.translate(offset: Offset(0, -top), child: Text.rich(text)),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final face = ClockFace.of(widget.face);
+    final now = DateTime.now();
+    final hour = widget.h24 ? now.hour.toString().padLeft(2, '0') : '${(now.hour + 11) % 12 + 1}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _line(
+          TextSpan(
+            text: '$hour:${now.minute.toString().padLeft(2, '0')}',
+            style: TextStyle(
+              fontFamily: face.family,
+              fontSize: face.time,
+              height: 1,
+              color: Look.white,
+              fontVariations: face.timeAxes,
+              shadows: _shadows,
+            ),
+            children: [
+              if (!widget.h24)
+                TextSpan(
+                  text: now.hour < 12 ? ' am' : ' pm',
+                  style: TextStyle(fontSize: face.time * 0.36, color: Look.dim),
+                ),
+            ],
+          ),
+          size: face.time,
+          top: face.timeTop,
+          digits: ClockFace.digits,
+        ),
+        const SizedBox(height: ClockFace.gap),
+        _line(
+          TextSpan(
+            text: '${_days[now.weekday - 1]} ${now.day} ${_months[now.month - 1]}',
+            style: TextStyle(
+              fontFamily: face.family,
+              fontSize: face.date,
+              height: 1,
+              color: const Color(0xEBFFFFFF),
+              fontVariations: face.dateAxes,
+              shadows: _shadows,
+            ),
+          ),
+          size: face.date,
+          top: face.dateTop,
+          digits: ClockFace.dateDigits,
+        ),
+      ],
+    );
+  }
+}
+
+/// The top bar's icons, from Phosphor's bold set.
+abstract final class Glyphs {
+  static const _font = 'Phosphor';
+  static const gear = IconData(0xe272, fontFamily: _font);
+  static const ethernet = IconData(0xedde, fontFamily: _font);
+  static const wifiNone = IconData(0xe4f0, fontFamily: _font);
+  static const wifiLow = IconData(0xe4ec, fontFamily: _font);
+  static const wifiMedium = IconData(0xe4ee, fontFamily: _font);
+  static const wifiHigh = IconData(0xe4ea, fontFamily: _font);
+  static const wifiOff = IconData(0xe4f2, fontFamily: _font);
+  static const globe = IconData(0xe28e, fontFamily: _font);
+  static const vpnOn = IconData(0xe40c, fontFamily: _font);
+  static const vpnOff = IconData(0xe410, fontFamily: _font);
 }
 
 final _activateKeys = {

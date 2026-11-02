@@ -10,6 +10,7 @@ import 'media.dart';
 import 'native.dart';
 import 'player.dart';
 import 'services.dart';
+import 'ui.dart';
 
 /// Gradient wallpapers: name and colours.
 const gradients = <(String, List<Color>)>[
@@ -28,6 +29,9 @@ final _graphite = gradients.firstWhere((gradient) => gradient.$1 == 'Graphite').
 /// while the first film loads, or if none can play: not a coloured gradient
 /// flashing up at start. With no videos or pictures left to show, the
 /// chosen gradient shows instead.
+///
+/// The screensaver is the wallpaper, on its own. One that doesn't move (a
+/// gradient, a single picture) gives way to aerial films while it shows.
 class Wallpaper extends StatelessWidget {
   const Wallpaper({super.key});
 
@@ -35,7 +39,7 @@ class Wallpaper extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = Services.of(context);
     return ListenableBuilder(
-      listenable: s.config,
+      listenable: Listenable.merge([s.config, s.saver]),
       builder: (context, _) {
         final config = s.config;
         final plain = switch (config.wallpaper) {
@@ -45,6 +49,12 @@ class Wallpaper extends StatelessWidget {
           _ => false,
         };
         final colors = plain ? gradients[config.gradient.clamp(0, gradients.length - 1)].$2 : _graphite;
+        final still =
+            plain ||
+            config.wallpaper == 'image' &&
+                config.pictures.length == 1 &&
+                MediaKind.pictures.matches(config.pictures.first);
+        final saverFilm = still && s.saver.value;
         final size = MediaQuery.sizeOf(context) * MediaQuery.devicePixelRatioOf(context);
         return Stack(
           fit: StackFit.expand,
@@ -63,12 +73,21 @@ class Wallpaper extends StatelessWidget {
               _aerials(s, config)
             else if (config.wallpaper == 'video' && config.videos.isNotEmpty)
               VideoShow(sources: config.videos, shuffle: config.videoShuffle, loopMinutes: config.videoLoopMinutes)
-            else if (config.wallpaper == 'image' && config.pictures.isNotEmpty)
+            // An HDR film plays beneath the screen, which a picture would hide.
+            else if (config.wallpaper == 'image' &&
+                config.pictures.isNotEmpty &&
+                !(saverFilm && s.aerials.showsHdr(config.aerialQuality)))
               PictureShow(
                 sources: config.pictures,
                 every: Duration(minutes: config.pictureMinutes),
                 shuffle: config.pictureShuffle,
                 cacheWidth: size.width.round(),
+              ),
+            if (still)
+              AnimatedSwitcher(
+                duration: Look.medium,
+                layoutBuilder: (current, previous) => Stack(fit: StackFit.expand, children: [...previous, ?current]),
+                child: saverFilm ? _aerials(s, config, caption: false) : const SizedBox.shrink(),
               ),
             if (config.dimming > 0) ColoredBox(color: Color.fromRGBO(0, 0, 0, config.dimming)),
           ],
@@ -78,15 +97,16 @@ class Wallpaper extends StatelessWidget {
   }
 }
 
-/// Apple's aerial films: drawn into the screen, or in HDR beneath it.
-Widget _aerials(Services s, Config config) {
+/// Apple's aerial films: drawn into the screen, or in HDR beneath it. With
+/// [caption], each says what it shows, under the clock.
+Widget _aerials(Services s, Config config, {bool caption = true}) {
   // A new quality or choice of scenes starts over with matching films.
   final key = ValueKey('${config.aerialQuality} ${config.aerialsOff.join(',')}');
   final maxLength = config.aerialMinutes > 0 ? Duration(minutes: config.aerialMinutes) : null;
   Scene? next(Scene? previous) =>
       s.aerials.next(previous, config.aerialQuality, off: config.aerialsOff, useSaved: config.aerialCache);
   void showing(Scene scene) {
-    s.caption.value = scene.caption;
+    if (caption) s.caption.value = scene.caption;
     if (config.aerialCache) s.aerials.remember(scene, config.aerialQuality);
   }
 

@@ -1,8 +1,8 @@
-import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/widgets.dart';
 
 import 'config.dart';
 import 'native.dart';
+import 'ui.dart';
 
 typedef VpnApp = ({String package, String name});
 
@@ -42,16 +42,10 @@ class StatusModel extends ChangeNotifier with WidgetsBindingObserver {
       vpnApps.isEmpty ? null : vpnApps.firstWhere((app) => app.package == _config.vpnApp, orElse: () => vpnApps.first);
 
   IconData get networkIcon => switch (kind) {
-    'ethernet' => Icons.settings_ethernet,
-    'wifi' => const [
-      Icons.signal_wifi_0_bar,
-      Icons.network_wifi_1_bar,
-      Icons.network_wifi_2_bar,
-      Icons.network_wifi_3_bar,
-      Icons.signal_wifi_4_bar,
-    ][_bars],
-    'none' => Icons.signal_wifi_off,
-    _ => Icons.public,
+    'ethernet' => Glyphs.ethernet,
+    'wifi' => const [Glyphs.wifiNone, Glyphs.wifiLow, Glyphs.wifiMedium, Glyphs.wifiHigh, Glyphs.wifiHigh][_bars],
+    'none' => Glyphs.wifiOff,
+    _ => Glyphs.globe,
   };
 
   int get _bars => switch (signal) {

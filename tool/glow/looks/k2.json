@@ -1,0 +1,9 @@
+{
+ "wallpaper": "/Users/stian/dev/GTVL/tool/glow/out/wallpaper.png",
+ "tiles": "/Users/stian/dev/GTVL/tool/glow/out",
+ "ppd": 1.0,
+ "rays": 4000000,
+ "light_mode": "behind",
+ "light_gap": 34,
+ "light_radiance": 1.45
+}
