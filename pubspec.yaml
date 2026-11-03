@@ -1,7 +1,7 @@
 name: gtvl
 description: "GTVL: a clean, light home screen for Android TV."
 publish_to: 'none'
-version: 0.2.7+9
+version: 0.2.8+10
 
 environment:
   sdk: ^3.11.5
