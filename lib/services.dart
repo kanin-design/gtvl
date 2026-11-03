@@ -37,9 +37,9 @@ class Services {
   /// What the wallpaper shows now, e.g. "Hawaii · Pu'u O 'Umi"; null when nothing to say.
   final caption = ValueNotifier<String?>(null);
 
-  /// An HDR film plays on the video layer beneath the screen, which then
-  /// leaves the wallpaper's place see-through.
-  final hdrBeneath = ValueNotifier(false);
+  /// A film shows on the video layer beneath the screen, which leaves the
+  /// wallpaper's place see-through.
+  final filmBeneath = ValueNotifier(false);
 
   /// The screensaver shows: no button pressed for a while, so only the wallpaper is on screen.
   final saver = ValueNotifier(false);

@@ -1,21 +1,27 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/widgets.dart';
-import 'package:video_player/video_player.dart';
 
 import 'aerials.dart';
+import 'native.dart';
 import 'services.dart';
 
-/// Plays scenes back to back with a crossfade, drawn into GTVL's screen.
-/// HDR scenes play beneath it instead (see HdrScenePlayer).
+/// Plays scenes back to back on the TV's own video layer beneath GTVL's screen
+/// (Android's Deck). The next scene loads while one plays, then fades in over
+/// it. HDR scenes instead follow without a gap while the screen dips to black,
+/// as the TV blends no two HDR films; so do all on a TV that can't fade a video
+/// layer.
 ///
 /// One video decodes at a time, except during a scene's last seconds while
-/// the next one buffers, and none at all while another app is in front, so
-/// that app gets the hardware video decoders and the memory.
+/// the next one loads, and none at all while another app is in front, so that
+/// app gets the hardware video decoders and the memory.
+///
+/// The wallpaper's gradient stays over the film until its first frame, then
+/// fades off ([Services.filmBeneath]). Drawn, this is only the black of a dip.
 ///
 /// When no scene will open (the TV started before its network was up, say),
-/// it tries again after a while, and at once when the network comes back.
+/// the gradient stays, and it tries again after a while, and at once when the
+/// network comes back.
 class ScenePlayer extends StatefulWidget {
   const ScenePlayer({
     super.key,
@@ -25,6 +31,7 @@ class ScenePlayer extends StatefulWidget {
     this.speed = 1,
     this.maxLength,
     this.loop = false,
+    this.hdr = false,
   });
 
   /// The scene after [previous]; null [previous] means starting.
@@ -34,7 +41,7 @@ class ScenePlayer extends StatefulWidget {
   /// until the next one, from the new choice, can fade in over it.
   final Object? source;
 
-  /// Called when a scene starts fading in.
+  /// Called when a scene starts showing.
   final ValueChanged<Scene>? onShowing;
 
   /// Playback speed; below 1 is slower and calmer.
@@ -46,24 +53,45 @@ class ScenePlayer extends StatefulWidget {
   /// Each scene loops seamlessly until [maxLength] has passed.
   final bool loop;
 
+  /// The scenes are HDR, so they can't fade into one another.
+  final bool hdr;
+
   @override
   State<ScenePlayer> createState() => _ScenePlayerState();
 }
 
-class _Layer {
-  _Layer(this.scene, this.video);
-
-  final Scene scene;
-  final VideoPlayerController video;
-  bool shown = false;
-
-  /// Runs from when the scene starts fading in.
-  final played = Stopwatch();
-}
-
 class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   static const _fade = Duration(milliseconds: 1500);
+  static const _dip = Duration(milliseconds: 700);
   static const _lead = Duration(seconds: 10);
+
+  /// How late a tick from the deck can tell how long a scene has left.
+  static const _tickEvery = Duration(milliseconds: 500);
+
+  /// A film shows: the wallpaper's place turns see-through.
+  late final ValueNotifier<bool> _beneath;
+
+  /// Players on screen. The wallpaper turns opaque again only once the last
+  /// one has gone, not when another takes its place.
+  static int _live = 0;
+  StreamSubscription<Object?>? _events;
+
+  /// The scenes handed to the deck, in its order, and the one playing.
+  final _scenes = <Scene>[];
+  int _index = 0;
+
+  /// Black over the film: around each dip between films.
+  bool _covered = false;
+
+  /// The deck holds a film; its first frame is awaited; a next scene is being
+  /// chosen, or waited for after several wouldn't open.
+  bool _playing = false, _opening = false, _choosing = false;
+
+  /// Scenes fade into one another, rather than dip to black between them.
+  bool _fades = false;
+
+  /// Bumped on every new start, so answers from before it are thrown away.
+  int _run = 0;
 
   /// Scenes tried in a row before giving up (offline, unsupported codec).
   static const _attempts = 3;
@@ -72,30 +100,63 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   /// network coming back (or GTVL coming to the front) tries again.
   static const _waits = [Duration(seconds: 5), Duration(seconds: 15), Duration(minutes: 1), Duration(minutes: 5)];
 
-  _Layer? _out, _now, _next;
-  bool _preparing = false;
-  bool _fading = false;
+  /// Films that failed in a row, and times given up in a row.
+  int _failures = 0, _misses = 0;
+  Timer? _retry;
 
-  /// The last [_prepare] tried [_attempts] scenes and none would open.
-  bool _gaveUp = false;
-
-  /// Nothing would open: waiting to try again, after [_stalledAfter].
+  /// Gave up on films that failed: waiting to try again, after [_stalledAfter].
   bool _stalled = false;
   Scene? _stalledAfter;
-  int _misses = 0;
-  Timer? _retry;
   late final ValueNotifier<bool> _online;
 
-  /// Bumped on every stop, so async work from before it is thrown away.
-  int _run = 0;
-  Timer? _fadeDone;
+  /// How long the scene playing has shown.
+  final _shown = Stopwatch();
+
+  Scene? get _current => _index < _scenes.length ? _scenes[_index] : null;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _beneath = Services.of(context).filmBeneath;
     _online = Services.of(context).status.online..addListener(_onOnline);
+    _live++;
+    _events = Native.events.where((event) => event['type'] == 'deck').listen(_onEvent);
     if (_inFront) _start();
+  }
+
+  @override
+  void didUpdateWidget(ScenePlayer old) {
+    super.didUpdateWidget(old);
+    if (old.source != widget.source) {
+      final now = _current;
+      if (_playing && _fades && !widget.hdr && now != null) {
+        _run++;
+        _scenes.length = _index + 1;
+        _chooseAfter(now, fadeAtOnce: true);
+      } else {
+        _start(now);
+      }
+    } else if (_playing && (old.loop != widget.loop || old.speed != widget.speed)) {
+      Native.deckAdjust(loop: (_current?.loop ?? false) || widget.loop, speed: widget.speed);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _online.removeListener(_onOnline);
+    _retry?.cancel();
+    _events?.cancel();
+    _run++;
+    Native.deckStop();
+    _live--;
+    // After this frame: the tree is locked while it is taken down.
+    final beneath = _beneath;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_live == 0) beneath.value = false;
+    });
+    super.dispose();
   }
 
   /// Nothing plays while another app is in front; coming back starts it.
@@ -105,64 +166,117 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   };
 
   @override
-  void didUpdateWidget(ScenePlayer oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.speed != widget.speed) _now?.video.setPlaybackSpeed(widget.speed);
-    if (oldWidget.loop != widget.loop) _now?.video.setLooping(widget.loop || _now!.scene.loop);
-    if (oldWidget.source != widget.source) _switch();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _online.removeListener(_onOnline);
-    _release();
-    super.dispose();
-  }
-
-  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
-        final now = _now;
-        if (now == null) {
-          _start();
-        } else if (now.video.value.hasError) {
-          _start(now.scene);
+        if (_playing) {
+          Native.deckResume();
         } else {
-          now.video.play();
+          _failures = _misses = 0;
+          _start();
         }
       case AppLifecycleState.inactive:
-        _now?.video.pause();
+        Native.deckPause();
       case AppLifecycleState.hidden || AppLifecycleState.paused || AppLifecycleState.detached:
-        _release();
-        if (mounted) setState(() {});
+        // Another app gets the decoder and the memory.
+        _run++;
+        _retry?.cancel();
+        _stalled = false;
+        _playing = _opening = false;
+        Native.deckStop();
+        _beneath.value = false;
+        if (mounted) setState(() => _covered = false);
     }
   }
 
-  void _start([Scene? after]) {
-    final run = _run;
-    _prepare(after).then((layer) {
-      if (run != _run) return;
-      if (layer != null) {
-        _stalled = false;
-        _misses = 0;
-        _show(layer);
-      } else if (_gaveUp) {
-        _stall(after);
-      }
-    });
+  /// Starts over with the scene after [after], in black if one was showing.
+  Future<void> _start([Scene? after]) async {
+    final run = ++_run;
+    if (mounted && _beneath.value) setState(() => _covered = true);
+    final scene = await widget.next(after);
+    if (run != _run || !mounted) return;
+    if (scene == null) {
+      _giveUp();
+      return;
+    }
+    _scenes
+      ..clear()
+      ..add(scene);
+    _index = 0;
+    _retry?.cancel();
+    _choosing = false;
+    _playing = _opening = true;
+    final fades = await Native.deckPlay(scene.uri, loop: scene.loop || widget.loop, speed: widget.speed);
+    if (run == _run) _fades = fades && !widget.hdr;
   }
 
-  /// No scene would open: try again after a wait that grows with each miss.
-  void _stall(Scene? after) {
-    _stalled = true;
-    _stalledAfter = after;
+  void _onEvent(Map<Object?, Object?> event) {
+    if (!_playing) return;
+    switch (event['what']) {
+      case 'frame':
+        _failures = _misses = 0;
+        _stalled = false;
+        if (_opening) {
+          _opening = false;
+          _beneath.value = true;
+          _reveal();
+        }
+      case 'next':
+        _failures = _misses = 0;
+        _index = event['index'] is int ? event['index']! as int : _index + 1;
+        _reveal();
+      case 'position':
+        if (event case {'position': final int position, 'duration': final int duration}) _tick(position, duration);
+      case 'missed':
+        debugPrint('Scene "${_scenes.last.caption}" failed: ${event['message']}');
+        _missedNext(_scenes.removeLast());
+      case 'ended':
+        // Nothing came next in time: start over with the scene after this one.
+        _start(_current);
+      case 'error':
+        debugPrint('Scene "${_current?.caption}" failed: ${event['message']}');
+        if (++_failures < _attempts) {
+          _start(_current);
+        } else {
+          _giveUp(retry: true);
+        }
+    }
+  }
+
+  /// The next scene wouldn't open, so the one playing goes on over and over.
+  /// The one after [missed] gets its turn, or after a few, one after a wait.
+  void _missedNext(Scene missed) {
+    if (++_failures < _attempts) {
+      _chooseAfter(missed);
+      return;
+    }
+    _failures = 0;
+    _choosing = true;
+    final run = _run;
     _retry?.cancel();
-    if (_misses >= _waits.length) return;
+    _retry = Timer(_waits[_misses.clamp(0, _waits.length - 1)], () {
+      if (run == _run) _choosing = false;
+    });
+    _misses++;
+  }
+
+  /// Nothing will play (offline, no scenes chosen, films this TV can't
+  /// decode): the gradient shows. With [retry] (films failed), a new try
+  /// comes after a wait, or at once when the network comes back.
+  void _giveUp({bool retry = false}) {
+    final after = _current;
+    _run++;
+    _playing = _opening = false;
+    Native.deckStop();
+    _beneath.value = false;
+    setState(() => _covered = false);
+    _retry?.cancel();
+    _stalled = retry;
+    _stalledAfter = after;
+    if (!retry || _misses >= _waits.length) return;
     final run = _run;
     _retry = Timer(_waits[_misses++], () {
-      if (run == _run && _stalled) _start(after);
+      if (run == _run && _stalled) _tryAgain();
     });
   }
 
@@ -170,168 +284,69 @@ class _ScenePlayerState extends State<ScenePlayer> with WidgetsBindingObserver {
   void _onOnline() {
     if (!_online.value || !_stalled || !_inFront) return;
     _retry?.cancel();
+    _tryAgain();
+  }
+
+  void _tryAgain() {
+    _stalled = false;
+    _failures = 0;
     _start(_stalledAfter);
   }
 
-  /// A new choice of scenes: drops the next scene, if one was ready, and
-  /// fades in the one after the current scene by the new choice.
-  void _switch() {
-    _run++;
-    _preparing = false;
-    _next?.video.dispose();
-    _next = null;
-    if (_inFront) _start(_now?.scene);
+  /// The film playing shows: lift any black once its first frames are up.
+  void _reveal() {
+    final scene = _current;
+    if (scene == null) return;
+    _shown
+      ..reset()
+      ..start();
+    widget.onShowing?.call(scene);
+    Future<void>.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) setState(() => _covered = false);
+    });
   }
 
-  void _release() {
-    _run++;
-    _fadeDone?.cancel();
-    _retry?.cancel();
-    _stalled = false;
-    _misses = 0;
-    for (final layer in {_out, _now, _next}) {
-      layer?.video.removeListener(_tick);
-      layer?.video.dispose();
-    }
-    _out = _now = _next = null;
-    _preparing = _fading = false;
-  }
-
-  /// Opens the next scene without playing it, skipping any that fail to load.
-  Future<_Layer?> _prepare(Scene? previous) async {
-    if (_preparing) return null;
-    _preparing = true;
-    _gaveUp = false;
+  /// Chooses the scene after [after] and hands it to the deck ahead of time.
+  void _chooseAfter(Scene after, {bool fadeAtOnce = false}) {
+    _choosing = true;
     final run = _run;
-    try {
-      for (var attempt = 0; attempt < _attempts; attempt++) {
-        final scene = await widget.next(previous);
-        if (scene == null || run != _run) return null;
-        previous = scene;
-        // A wallpaper must never take audio focus from what else is playing.
-        final options = VideoPlayerOptions(mixWithOthers: true);
-        final video = scene.file
-            ? VideoPlayerController.file(File(scene.uri), videoPlayerOptions: options)
-            : VideoPlayerController.networkUrl(Uri.parse(scene.uri), videoPlayerOptions: options);
-        try {
-          await video.initialize();
-          await video.setVolume(0);
-          if (widget.speed != 1) await video.setPlaybackSpeed(widget.speed);
-          if (scene.loop || widget.loop) await video.setLooping(true);
-          if (run != _run || !mounted) {
-            await video.dispose();
-            return null;
-          }
-          return _Layer(scene, video);
-        } on Object catch (e) {
-          debugPrint('Scene "${scene.caption}" failed: $e');
-          await video.dispose();
-        }
-      }
-      _gaveUp = run == _run;
-      return null;
-    } finally {
-      if (run == _run) _preparing = false;
-    }
-  }
-
-  /// Fades [layer] in over the current scene, then releases the old one.
-  void _show(_Layer layer) {
-    // A new choice can arrive mid-fade: the scene fading out goes at once.
-    final gone = _out;
-    if (gone != null) {
-      gone.video.removeListener(_tick);
-      gone.video.dispose();
-    }
-    final old = _now;
-    _out = old;
-    _now = layer;
-    _next = null;
-    _fading = true;
-    layer.played.start();
-    layer.video
-      ..addListener(_tick)
-      ..play();
-    widget.onShowing?.call(layer.scene);
-    setState(() {});
-    // Shown on the next frame, so the fade starts from transparent.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _now == layer) setState(() => layer.shown = true);
-    });
-    _fadeDone?.cancel();
-    _fadeDone = Timer(_fade, () {
-      old?.video.removeListener(_tick);
-      old?.video.dispose();
-      if (_out == old) _out = null;
-      _fading = false;
-      if (mounted) setState(() {});
+    Future.value(widget.next(after)).then((next) {
+      if (run != _run) return;
+      _choosing = false;
+      if (next == null) return;
+      _scenes.add(next);
+      Native.deckQueue(next.uri, loop: next.loop || widget.loop, blend: _fades);
+      if (fadeAtOnce) Native.deckSkip(_fade);
     });
   }
 
-  void _tick() {
-    final now = _now;
-    if (now == null) return;
-    final value = now.video.value;
-    if (value.hasError) {
-      _broke(now);
-      return;
-    }
-    if (_fading || now.scene.loop || !value.isInitialized || value.duration == Duration.zero) return;
+  /// Loads the next scene ahead of time, then fades to it or dips to black
+  /// before the change, and cuts a scene short when its time is up.
+  void _tick(int position, int duration) {
+    final scene = _current;
+    if (scene == null || scene.loop || duration <= 0) return;
     final max = widget.maxLength;
-    // A looping scene runs out its time; any other ends with its video, or sooner.
+    final length = Duration(milliseconds: duration);
+    final cutShort = max != null && (widget.loop || max < length);
     final left = widget.loop && max != null
-        ? max - now.played.elapsed
-        : (max != null && max < value.duration ? max : value.duration) - value.position;
-
-    if (left <= _lead && _next == null && !_preparing) {
-      final run = _run;
-      _prepare(now.scene).then((next) {
-        if (run != _run || _now != now) {
-          next?.video.dispose();
-        } else if (next == null) {
-          // Nothing else would load: keep this one going.
-          now.video.setLooping(true);
-          if (now.video.value.isCompleted) now.video.play();
-        } else {
-          _next = next;
-          // Ready only after this one ended or broke off, which ticks no more: change now.
-          if (now.video.value.isCompleted || now.video.value.hasError) _show(next);
-        }
-      });
-    }
-    final next = _next;
-    if (next != null && (left <= _fade || value.isCompleted)) _show(next);
-  }
-
-  /// The scene playing broke off (the network dropped), and ticks no more:
-  /// the next one fades in as soon as it is ready, or one is looked for.
-  void _broke(_Layer now) {
-    final next = _next;
-    if (next != null) {
-      _show(next);
-    } else if (!_preparing) {
-      _start(now.scene);
+        ? max - _shown.elapsed
+        : (max != null && max < length ? max : length) - Duration(milliseconds: position);
+    final queued = _scenes.length > _index + 1;
+    if (left <= _lead && !queued && !_choosing) _chooseAfter(scene);
+    if (!queued) return;
+    if (_fades) {
+      if (left <= _fade + _tickEvery) Native.deckSkip(_fade);
+    } else {
+      if (!_covered && left <= _dip + const Duration(milliseconds: 300)) setState(() => _covered = true);
+      if (cutShort && left <= Duration.zero) Native.deckSkip();
     }
   }
 
   @override
-  Widget build(BuildContext context) => RepaintBoundary(
-    child: Stack(
-      fit: StackFit.expand,
-      children: [
-        for (final layer in [?_out, ?_now])
-          AnimatedOpacity(
-            key: ObjectKey(layer),
-            opacity: layer.shown ? 1 : 0,
-            duration: _fade,
-            curve: Curves.easeInOut,
-            child: FittedBox(
-              fit: BoxFit.cover,
-              clipBehavior: Clip.hardEdge,
-              child: SizedBox.fromSize(size: layer.video.value.size, child: VideoPlayer(layer.video)),
-            ),
-          ),
-      ],
-    ),
+  Widget build(BuildContext context) => AnimatedOpacity(
+    opacity: _covered ? 1 : 0,
+    duration: _dip,
+    curve: Curves.easeInOut,
+    child: const ColoredBox(color: Color(0xFF000000)),
   );
 }

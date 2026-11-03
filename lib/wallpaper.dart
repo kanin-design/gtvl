@@ -5,7 +5,6 @@ import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
 import 'config.dart';
-import 'deck.dart';
 import 'media.dart';
 import 'native.dart';
 import 'player.dart';
@@ -39,7 +38,7 @@ class Wallpaper extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = Services.of(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([s.config, s.saver]),
+      listenable: Listenable.merge([s.config, s.saver, s.filmBeneath]),
       builder: (context, _) {
         final config = s.config;
         final plain = switch (config.wallpaper) {
@@ -55,40 +54,53 @@ class Wallpaper extends StatelessWidget {
                 config.pictures.length == 1 &&
                 MediaKind.pictures.matches(config.pictures.first);
         final saverFilm = still && s.saver.value;
+        final beneath = s.filmBeneath.value;
         final size = MediaQuery.sizeOf(context) * MediaQuery.devicePixelRatioOf(context);
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            // See-through while an HDR film plays beneath the screen.
-            ValueListenableBuilder(
-              valueListenable: s.hdrBeneath,
-              builder: (context, beneath, gradient) => beneath ? const SizedBox.shrink() : gradient!,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
-                ),
-              ),
-            ),
-            if (config.wallpaper == 'aerials')
-              _aerials(s, config)
-            else if (config.wallpaper == 'video' && config.videos.isNotEmpty)
-              VideoShow(sources: config.videos, shuffle: config.videoShuffle, loopMinutes: config.videoLoopMinutes)
-            // An HDR film plays beneath the screen, which a picture would hide.
-            else if (config.wallpaper == 'image' &&
-                config.pictures.isNotEmpty &&
-                !(saverFilm && s.aerials.showsHdr(config.aerialQuality)))
-              PictureShow(
+        final pictures = config.wallpaper == 'image' && config.pictures.isNotEmpty
+            ? PictureShow(
                 sources: config.pictures,
                 every: Duration(minutes: config.pictureMinutes),
                 shuffle: config.pictureShuffle,
                 cacheWidth: size.width.round(),
-              ),
+              )
+            : null;
+        final filmShows = beneath && (saverFilm || !still);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // Beneath the screen, so under all of this.
             if (still)
               AnimatedSwitcher(
                 duration: Look.medium,
                 layoutBuilder: (current, previous) => Stack(fit: StackFit.expand, children: [...previous, ?current]),
                 child: saverFilm ? _aerials(s, config, caption: false) : const SizedBox.shrink(),
+              )
+            else if (config.wallpaper == 'aerials')
+              _aerials(s, config)
+            else if (config.wallpaper == 'video')
+              VideoShow(sources: config.videos, shuffle: config.videoShuffle, loopMinutes: config.videoLoopMinutes),
+            // Fades off a film's first frame. A screensaver's film plays on
+            // while it fades back; another is gone already, so it is back at once.
+            AnimatedOpacity(
+              opacity: filmShows ? 0 : 1,
+              duration: filmShows
+                  ? const Duration(milliseconds: 1500)
+                  : still
+                  ? Look.medium
+                  : Duration.zero,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+                    ),
+                  ),
+                  if (still) ?pictures,
+                ],
               ),
+            ),
+            if (!still) ?pictures,
             if (config.dimming > 0) ColoredBox(color: Color.fromRGBO(0, 0, 0, config.dimming)),
           ],
         );
@@ -97,8 +109,8 @@ class Wallpaper extends StatelessWidget {
   }
 }
 
-/// Apple's aerial films: drawn into the screen, or in HDR beneath it. With
-/// [caption], each says what it shows, under the clock.
+/// Apple's aerial films, each saying what it shows, under the clock, with
+/// [caption].
 Widget _aerials(Services s, Config config, {bool caption = true}) {
   // A new quality or choice of scenes starts over with matching films.
   final key = ValueKey('${config.aerialQuality} ${config.aerialsOff.join(',')}');
@@ -110,9 +122,14 @@ Widget _aerials(Services s, Config config, {bool caption = true}) {
     if (config.aerialCache) s.aerials.remember(scene, config.aerialQuality);
   }
 
-  return s.aerials.showsHdr(config.aerialQuality)
-      ? HdrScenePlayer(key: key, speed: config.aerialSpeed, maxLength: maxLength, next: next, onShowing: showing)
-      : ScenePlayer(key: key, speed: config.aerialSpeed, maxLength: maxLength, next: next, onShowing: showing);
+  return ScenePlayer(
+    key: key,
+    hdr: s.aerials.showsHdr(config.aerialQuality),
+    speed: config.aerialSpeed,
+    maxLength: maxLength,
+    next: next,
+    onShowing: showing,
+  );
 }
 
 /// The pictures [sources] stand for (picture files, and folders standing for
@@ -230,7 +247,7 @@ class VideoShow extends StatefulWidget {
 class _VideoShowState extends State<VideoShow> {
   List<String> _videos = const [];
 
-  /// Some of them are HDR, so all play beneath the screen.
+  /// Some of them are HDR, so none can fade into another.
   bool _hdr = false;
 
   /// The choice being looked up, and the one [_videos] came from.
@@ -298,9 +315,7 @@ class _VideoShowState extends State<VideoShow> {
     if (_videos.isEmpty) return const SizedBox.shrink();
     final loop = widget.loopMinutes > 0;
     final maxLength = loop ? Duration(minutes: widget.loopMinutes) : null;
-    return _hdr
-        ? HdrScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength)
-        : ScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength);
+    return ScenePlayer(source: _found, next: _next, loop: loop, maxLength: maxLength, hdr: _hdr);
   }
 }
 

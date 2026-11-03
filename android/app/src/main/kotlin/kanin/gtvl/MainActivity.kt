@@ -65,8 +65,8 @@ class MainActivity : FlutterActivity() {
     private val launcherApps by lazy { getSystemService(LauncherApps::class.java) }
     private var events: EventChannel.EventSink? = null
 
-    /** HDR wallpaper films, on a video layer beneath GTVL's screen. */
-    private val deck by lazy { HdrDeck(this) { events?.success(it) } }
+    /** Wallpaper films, on a video layer beneath GTVL's screen. */
+    private val deck by lazy { Deck(this) { events?.success(it) } }
 
     /** When no button has been pressed for a while, for the screensaver. */
     private val idle by lazy { Idle(this) { events?.success(it) } }
@@ -77,8 +77,8 @@ class MainActivity : FlutterActivity() {
     /** A checked update to install as the TV goes to standby, without asking (Android 12 on, once allowed). */
     private var standbyUpdate: String? = null
 
-    // GTVL's screen draws see-through where an HDR film shows beneath it
-    // (HdrDeck), still on a surface of its own: Flutter's texture mode would
+    // GTVL's screen draws see-through where a film shows beneath it
+    // (Deck), still on a surface of its own: Flutter's texture mode would
     // cost a copy of every frame.
     override fun getBackgroundMode() = BackgroundMode.transparent
 
@@ -122,31 +122,30 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "buttonSettings" -> result.success(buttonSettings())
-                "hdrPlay" -> {
-                    deck.play(call.argument("uri")!!, call.argument("loop") ?: false, (call.argument<Double>("speed") ?: 1.0).toFloat())
-                    result.success(null)
-                }
-                "hdrAdjust" -> {
+                "deckPlay" -> result.success(
+                    deck.play(call.argument("uri")!!, call.argument("loop") ?: false, (call.argument<Double>("speed") ?: 1.0).toFloat()),
+                )
+                "deckAdjust" -> {
                     deck.adjust(call.argument("loop") ?: false, (call.argument<Double>("speed") ?: 1.0).toFloat())
                     result.success(null)
                 }
-                "hdrQueue" -> {
-                    deck.queue(arg!!)
+                "deckQueue" -> {
+                    deck.queue(call.argument("uri")!!, call.argument("loop") ?: false, call.argument("blend") ?: false)
                     result.success(null)
                 }
-                "hdrSkip" -> {
-                    deck.skip()
+                "deckSkip" -> {
+                    deck.skip((call.arguments as Number).toLong())
                     result.success(null)
                 }
-                "hdrPause" -> {
+                "deckPause" -> {
                     deck.pause()
                     result.success(null)
                 }
-                "hdrResume" -> {
+                "deckResume" -> {
                     deck.resume()
                     result.success(null)
                 }
-                "hdrStop" -> {
+                "deckStop" -> {
                     deck.stop()
                     result.success(null)
                 }

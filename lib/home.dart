@@ -563,10 +563,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _molten.focus(null);
         }
       },
-      child: Glass(
-        sigma: math.max(c.glassBlur, 16),
-        tint: const Color(0x801C1C1E),
-        vibrancy: 1.35,
+      // Blur reaches no film beneath the screen, so with one it costs for nothing.
+      child: ValueListenableBuilder(
+        valueListenable: s.filmBeneath,
+        builder: (context, beneath, band) => Glass(
+          sigma: beneath ? 0 : math.max(c.glassBlur, 16),
+          tint: const Color(0x801C1C1E),
+          vibrancy: 1.35,
+          child: band!,
+        ),
         child: CustomPaint(
           painter: _BandLight(line: c.lineWidth, alpha: c.lineAlpha),
           child: apps.isEmpty

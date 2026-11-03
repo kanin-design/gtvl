@@ -154,26 +154,28 @@ abstract final class Native {
   /// page the TV has.
   static Future<void> buttonSettings() => _main.invokeMethod('buttonSettings');
 
-  /// Plays an HDR film on the video layer beneath GTVL's screen (Android's
-  /// HdrDeck), replacing anything there; [loop] plays it, and any queued
-  /// after it, over and over.
-  static Future<void> hdrPlay(String uri, {bool loop = false, double speed = 1}) =>
-      _main.invokeMethod('hdrPlay', {'uri': uri, 'loop': loop, 'speed': speed});
+  /// Plays a film on the video layer beneath GTVL's screen (Android's Deck),
+  /// replacing anything there; [loop] plays it over and over. Says whether
+  /// films can fade into one another on this TV.
+  static Future<bool> deckPlay(String uri, {bool loop = false, double speed = 1}) async =>
+      await _main.invokeMethod<bool>('deckPlay', {'uri': uri, 'loop': loop, 'speed': speed}) ?? false;
 
-  /// Changes how the HDR film playing, and any queued after it, play.
-  static Future<void> hdrAdjust({required bool loop, required double speed}) =>
-      _main.invokeMethod('hdrAdjust', {'loop': loop, 'speed': speed});
+  /// Changes how the film playing plays, and how fast any coming will.
+  static Future<void> deckAdjust({required bool loop, required double speed}) =>
+      _main.invokeMethod('deckAdjust', {'loop': loop, 'speed': speed});
 
-  /// Loads an HDR film to follow the one playing, without a gap.
-  static Future<void> hdrQueue(String uri) => _main.invokeMethod('hdrQueue', uri);
+  /// Loads a film to follow the one playing: to fade in with [blend],
+  /// replacing any loaded before; else without a gap.
+  static Future<void> deckQueue(String uri, {bool loop = false, required bool blend}) =>
+      _main.invokeMethod('deckQueue', {'uri': uri, 'loop': loop, 'blend': blend});
 
-  /// Moves on to the film queued next.
-  static Future<void> hdrSkip() => _main.invokeMethod('hdrSkip');
-  static Future<void> hdrPause() => _main.invokeMethod('hdrPause');
-  static Future<void> hdrResume() => _main.invokeMethod('hdrResume');
+  /// Moves on to the film loaded next, fading over [fade] if it was loaded to.
+  static Future<void> deckSkip([Duration fade = Duration.zero]) => _main.invokeMethod('deckSkip', fade.inMilliseconds);
+  static Future<void> deckPause() => _main.invokeMethod('deckPause');
+  static Future<void> deckResume() => _main.invokeMethod('deckResume');
 
-  /// Lets go of the HDR video layer and its decoder.
-  static Future<void> hdrStop() => _main.invokeMethod('hdrStop');
+  /// Lets go of the video layer and its decoder.
+  static Future<void> deckStop() => _main.invokeMethod('deckStop');
 
   /// Starts the screensaver after [minutes] with no button pressed; 0 never.
   static Future<void> saverAfter(int minutes) => _main.invokeMethod('saverAfter', minutes);

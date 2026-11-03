@@ -9,8 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # The only dependency: plays the aerial and video wallpapers.
-  video_player: ^2.11.1
 
 dev_dependencies:
   flutter_test:

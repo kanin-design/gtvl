@@ -1005,7 +1005,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
           (v) => c.aerialQuality = v,
           enabled: (v) => !v.endsWith('_hdr') || s.aerials.hdr.contains(v),
           note: s.aerials.hdr.length == 2
-              ? "HDR films are Dolby Vision. The dock's glass can't blur them."
+              ? 'HDR films are Dolby Vision.'
               : "HDR films are Dolby Vision; this TV can't show the greyed-out ones.",
         ),
       ),

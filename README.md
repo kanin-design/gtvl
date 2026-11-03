@@ -12,8 +12,8 @@ files are smaller builds for 64-bit and 32-bit Android.
   this repository's collection (downloaded when picked) or from the TV's
   storage, one or several, or whole folders, taking turns with a crossfade (a
   video loops seamlessly, for a set time when there are several); or a
-  gradient. HDR films play on the TV's own video layer, in Dolby Vision where
-  the TV shows it.
+  gradient. Films play on the TV's own video layer, which costs a fraction of
+  drawing them, HDR ones in Dolby Vision where the TV shows it.
 - **Screensaver:** after a while with no button pressed (20 minutes unless
   changed, under Settings › Wallpaper), only the wallpaper stays on screen. A
   gradient or a single picture gives way to Apple aerials meanwhile. Any button
@@ -79,7 +79,7 @@ TVs skip drafts and pre-releases.
 `lib/` holds one concern per file: `native.dart` (the Android bridge),
 `config.dart` (settings as JSON), `apps.dart`, `status.dart`, `aerials.dart`,
 `media.dart` (pictures and videos from storage or the repository),
-`player.dart` and `deck.dart` (wallpaper video, HDR beneath the screen),
+`player.dart` (wallpaper films, beneath the screen),
 `plex.dart` and `channels.dart` (rows of shows from Plex and from other
 apps), `buttons.dart` (button names, actions and remaps) and `updates.dart`
 (GTVL's own updates), then the UI: `home.dart`, `wallpaper.dart`,
@@ -87,7 +87,7 @@ apps), `buttons.dart` (button names, actions and remaps) and `updates.dart`
 in `ui.dart`.
 `android/app/src/main/kotlin/kanin/gtvl/MainActivity.kt` lists apps, renders
 their tiles, launches them, and reports app, network and VPN changes;
-`AppRows.kt` reads the rows other apps share; `HdrDeck.kt` plays HDR films
+`AppRows.kt` reads the rows other apps share; `Deck.kt` plays wallpaper films
 on a video layer beneath the screen; `ButtonService.kt`, an accessibility
 service, remaps the remote's buttons; `Idle.kt` says when no button has been
 pressed, for the screensaver; `Updater.kt` checks a downloaded update

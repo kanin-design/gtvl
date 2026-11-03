@@ -59,6 +59,6 @@ flutter {
 }
 
 dependencies {
-    // HdrDeck's player: the same Media3 that video_player brings.
+    // The wallpaper films' player (Deck).
     implementation("androidx.media3:media3-exoplayer:1.9.2")
 }
