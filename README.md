@@ -3,6 +3,8 @@
 A clean, light home screen for Android TV, built to replace the Google TV
 home screen. Codename GTVL; app ID `kanin.gtvl`.
 
+![GTVL's home screen: a row of apps in a glass dock over an Apple aerial film of rays, with Plex in focus](docs/screenshots/home.jpg)
+
 Download the APK from [Releases](https://github.com/kanin-design/gtvl/releases).
 `gtvl-<version>.apk` works on every TV; the `-arm64-v8a` and `-armeabi-v7a`
 files are smaller builds for 64-bit and 32-bit Android.
@@ -48,6 +50,16 @@ files are smaller builds for 64-bit and 32-bit Android.
 - **Menus:** hold OK on an app for its menu; the settings panel slides in
   from the left, each level folding into a narrow column as the next opens,
   with the path on top.
+
+## Screenshots
+
+| The top bar, with the clock | The settings panel, three levels in |
+| --- | --- |
+| ![The top bar: settings, network and VPN icons on the left, the time and date on the right](docs/screenshots/top-bar.jpg) | ![Settings at Wallpaper, Apple aerials, Quality, with each earlier level folded into a narrow column](docs/screenshots/settings.jpg) |
+
+| Videos in this repository's collection | Clock fonts, previewed on the clock |
+| --- | --- |
+| ![The Videos settings page with previews of the films in the collection](docs/screenshots/videos.jpg) | ![The Clock font list beside the clock, which shows the font in focus](docs/screenshots/clock-font.jpg) |
 
 ## Build
 
