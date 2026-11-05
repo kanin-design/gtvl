@@ -47,7 +47,7 @@ abstract final class Media {
     return dot > 0 ? file.substring(0, dot) : file;
   }
 
-  /// "arc-fold.mp4" reads "Arc fold".
+  /// "gold-v16.mp4" reads "Gold v16".
   static String title(String path) {
     final words = stem(path).replaceAll(RegExp('[-_]+'), ' ').trim();
     return words.isEmpty ? name(path) : words[0].toUpperCase() + words.substring(1);

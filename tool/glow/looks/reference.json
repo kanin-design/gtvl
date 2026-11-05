@@ -1,5 +1,5 @@
 {
- "about": "The dock's glow reference: guide.py's light behind the foil (A6) plus half of its light pressed into the glass (C1), lit together by both.py, on a frame of the Arc fold video at 6.5 s with HBO Max in focus.",
+ "about": "The dock's glow reference: guide.py's light behind the foil (A6) plus half of its light pressed into the glass (C1), lit together by both.py, on a frame of the Fold video at 6.5 s with HBO Max in focus.",
  "command": "python3 both.py base.json first.json second.json 0.5 out/reference.png",
  "base": {
   "ppd": 2.0

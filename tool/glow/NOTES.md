@@ -43,7 +43,7 @@ fake in the app that looks like it.
   plays as 50 unbroken frames at 60 fps (measure.sh); between moves the video's own 30 fps.
 - The user tried step 4 on the emulator (AVD shieldtv) and found it too bright, then step 2. Step 4 was drawn correctly: beside the app, the
   emulator added the same light as the sheet's step 4 within a few levels. The emulator's
-  wallpaper is a daytime photo, so its dock's glass is olive (about 50/255) where the Arc fold
+  wallpaper is a daytime photo, so its dock's glass is olive (about 50/255) where the Fold
   frame's is near black, and the glow adds on top of that, turning yellow sooner. The Shield
   still has the K0 build. The shader's code is unchanged,
   only its numbers, so the Shield's 60 fps measurement still holds. To switch steps, copy that
