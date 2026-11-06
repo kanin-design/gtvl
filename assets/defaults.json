@@ -45,6 +45,7 @@
   "tileShape": "square",
   "dockAlign": "start",
   "dockGlow": 2,
+  "sounds": "android",
   "remotes": {},
   "showsOff": [],
   "autoUpdate": true

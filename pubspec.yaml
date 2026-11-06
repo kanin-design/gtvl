@@ -25,6 +25,8 @@ flutter:
     - assets/aerials.json
     - assets/defaults.json
     - assets/apple_root_ca.pem
+    # GTVL's own sound sets (lib/sounds.dart), made by tool/sounds.
+    - assets/sounds/pop/
   # The UI's, a variable font whose weight axis FontWeight sets; the clock's
   # faces (ClockFace); the top bar's icons, of which release builds keep just
   # the glyphs in use. Licences beside them.

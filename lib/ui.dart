@@ -5,6 +5,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'sounds.dart';
+
 /// The few values the whole UI shares.
 abstract final class Look {
   static const fast = Duration(milliseconds: 160);
@@ -321,7 +323,7 @@ class _PressableState extends State<Pressable> {
     if (event is KeyDownEvent) {
       _sink(true);
       if (widget.onLongPress == null) {
-        widget.onPressed?.call();
+        _press();
       } else {
         _hold = Timer(_holdTime, () {
           _hold = null;
@@ -340,10 +342,18 @@ class _PressableState extends State<Pressable> {
       if (_hold != null) {
         _hold!.cancel();
         _hold = null;
-        widget.onPressed?.call();
+        _press();
       }
     }
     return KeyEventResult.handled;
+  }
+
+  /// The press, then its sound: from the set the press may just have chosen.
+  void _press() {
+    final onPressed = widget.onPressed;
+    if (onPressed == null) return;
+    onPressed();
+    Sounds.press();
   }
 
   void _sink(bool down) {

@@ -49,3 +49,6 @@ app.*.map.json
 
 # Renders made by tool/glow, kept out of git.
 tool/glow/out/
+
+# References and pictures made by tool/sounds, kept out of git.
+tool/sounds/out/

@@ -50,6 +50,7 @@ class Config extends ChangeNotifier {
       tileShape = v.get('tileShape'),
       dockAlign = v.get('dockAlign'),
       dockGlow = v.get('dockGlow'),
+      sounds = v.get('sounds'),
       remotes = v.map('remotes'),
       showsOff = {...v.strings('showsOff')},
       autoUpdate = v.get('autoUpdate');
@@ -148,6 +149,10 @@ class Config extends ChangeNotifier {
   /// glow, else a level of GlowLook.steps from 1, the faintest.
   int dockGlow;
 
+  /// The sounds of moving and pressing OK, by set (see Sounds.sets): android
+  /// (the TV's own), one of GTVL's, or off.
+  String sounds;
+
   /// What the remote's buttons do instead, by remote (see Remaps).
   final Map<String, Object?> remotes;
 
@@ -214,6 +219,7 @@ class Config extends ChangeNotifier {
     'tileShape': tileShape,
     'dockAlign': dockAlign,
     'dockGlow': dockGlow,
+    'sounds': sounds,
     'remotes': remotes,
     'showsOff': showsOff.toList(),
     'autoUpdate': autoUpdate,

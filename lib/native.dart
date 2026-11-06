@@ -187,6 +187,14 @@ abstract final class Native {
     return ms == null ? null : ms ~/ 60000;
   }
 
+  /// Uses the sound set [set] for moves and OK: "android" (the TV's own),
+  /// "off", or one of GTVL's (`assets/sounds/<set>`), loaded now.
+  static Future<void> useSounds(String set) => _main.invokeMethod('sounds', set);
+
+  /// Plays the set's sound for [event]: up, down, left or right (focus moved
+  /// that way), or press (OK).
+  static Future<void> sound(String event) => _main.invokeMethod('sound', event);
+
   /// Opens a system settings screen, e.g. "android.settings.WIFI_SETTINGS".
   static Future<void> openSettings([String? action]) => _main.invokeMethod('settings', action);
 

@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 
 import 'home.dart';
 import 'services.dart';
+import 'sounds.dart';
 import 'ui.dart';
 
 Future<void> main() async {
@@ -12,7 +13,9 @@ Future<void> main() async {
     ..maximumSize = 300
     ..maximumSizeBytes = 32 << 20;
   HardwareKeyboard.instance.addHandler(_escape);
-  runApp(GtvlApp(services: await Services.start()));
+  final services = await Services.start();
+  Sounds.start(services.config);
+  runApp(GtvlApp(services: services));
 }
 
 final _navigator = GlobalKey<NavigatorState>();

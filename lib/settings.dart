@@ -12,6 +12,7 @@ import 'menu.dart' show showButtonsPrompt;
 import 'native.dart';
 import 'plex.dart';
 import 'services.dart';
+import 'sounds.dart';
 import 'ui.dart';
 import 'updates.dart';
 import 'wallpaper.dart';
@@ -29,6 +30,7 @@ enum _Section {
   topBar('Top bar', Icons.space_dashboard_outlined),
   apps('Apps', Icons.apps_outlined),
   buttons('Buttons', Icons.settings_remote_outlined),
+  sound('Sound', Icons.volume_up_outlined),
   android('Android settings', Icons.settings_outlined),
   about('About', Icons.info_outline);
 
@@ -300,15 +302,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
   /// Once the deepest level is built, focuses its row labelled [label] (the
   /// [nth] of that name), or else its first row, scrolled into view; with no
   /// rows, the level itself, so Left still works. Never while a menu is open
-  /// over settings.
-  void _focusRow([String? label, int nth = 0]) => WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (!mounted || !(ModalRoute.isCurrentOf(context) ?? true)) return;
-    final rows = _active.traversalDescendants;
-    final named = label == null ? const <FocusNode>[] : rows.where((node) => _labelOf(node) == label);
-    final node = named.elementAtOrNull(nth) ?? named.firstOrNull ?? rows.firstOrNull ?? _active;
-    node.requestFocus();
-    if (node != _active && node.context != null) reveal(node.context!, endZone: _endZone);
-  });
+  /// over settings. Asks for that frame too: Right from the rail into a level
+  /// already showing changes nothing else, so no frame would come.
+  void _focusRow([String? label, int nth = 0]) => WidgetsBinding.instance
+    ..addPostFrameCallback((_) {
+      if (!mounted || !(ModalRoute.isCurrentOf(context) ?? true)) return;
+      final rows = _active.traversalDescendants;
+      final named = label == null ? const <FocusNode>[] : rows.where((node) => _labelOf(node) == label);
+      final node = named.elementAtOrNull(nth) ?? named.firstOrNull ?? rows.firstOrNull ?? _active;
+      node.requestFocus();
+      if (node != _active && node.context != null) reveal(node.context!, endZone: _endZone);
+    })
+    ..scheduleFrame();
 
   /// The label of the row [node] belongs to.
   static String? _labelOf(FocusNode? node) => node?.context?.findAncestorWidgetOfExactType<_Row>()?.label;
@@ -522,6 +527,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _Section.topBar => _topBarRows(),
     _Section.apps => _appRows(),
     _Section.buttons => _buttonRows(),
+    _Section.sound => _soundRows(),
     _Section.about => _aboutRows(),
     _Section.android => const [],
   };
@@ -1718,6 +1724,27 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }
 
   /// The version, its updates from GitHub, and credits.
+  /// The sounds of moving and pressing OK: the choice of set.
+  List<Widget> _soundRows() {
+    final c = s.config;
+    return [
+      for (final (value, label) in Sounds.sets)
+        _Row(
+          label,
+          checked: c.sounds == value,
+          onPressed: () {
+            c.sounds = value;
+            c.changed();
+          },
+        ),
+      const _Note(
+        'The sounds of moving around and pressing OK. Android: the TV\'s own sounds, the ones its home screen makes. '
+        'They play only while Android\'s System sounds switch is on (Settings, Device Preferences, Sound). '
+        'Pop: a soft pop made for GTVL, a first test of its own sounds.',
+      ),
+    ];
+  }
+
   List<Widget> _aboutRows() {
     final updates = s.updates;
     final release = updates.release;

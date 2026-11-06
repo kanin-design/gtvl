@@ -72,6 +72,9 @@ class MainActivity : FlutterActivity() {
     private val idle by lazy { Idle(this) { events?.success(it) } }
 
     private val updater by lazy { Updater(this) }
+
+    /** The sounds of moving focus and pressing OK. */
+    private val sounds by lazy { Sounds(this) }
     private val prefs by lazy { Updater.prefs(this) }
 
     /** A checked update to install as the TV goes to standby, without asking (Android 12 on, once allowed). */
@@ -154,6 +157,14 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "sleepAfter" -> result.success(idle.sleepAfter())
+                "sounds" -> {
+                    sounds.use(arg!!)
+                    result.success(null)
+                }
+                "sound" -> {
+                    sounds.play(arg!!)
+                    result.success(null)
+                }
                 "updateInfo" -> result.success(updater.about())
                 "checkUpdate" -> inBackground(result) {
                     updater.check(call.argument("path")!!, call.argument<Number>("size")!!.toLong(), call.argument("sha256")!!)
@@ -324,6 +335,7 @@ class MainActivity : FlutterActivity() {
         unregisterReceiver(screen)
         stopEvents()
         deck.stop()
+        sounds.release()
         worker.shutdown()
         super.onDestroy()
     }
