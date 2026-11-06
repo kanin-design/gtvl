@@ -3,7 +3,22 @@
 Branch `dev`. The goal: a reference look for the glow behind the app in focus, then a cheap
 fake in the app that looks like it.
 
-## Status: the M1 ladder (2026-10-31)
+## Status: five levels and sixteen colours (2026-11-07)
+
+- The user: five levels, "the faintest very faint", the strongest "about as strong as it is now";
+  a colour picker, orange the default.
+- One look now, GlowLook.look: the old level 2 (M1 + K0 x0.069), the default the user approved.
+  Levels 1 to 5 scale its light before the tone curve (a dimmer lamp, not a dimmed picture) by
+  0.1, 0.178, 0.316, 0.562 and 1: about 0.8 stops a level. Saved levels move over in
+  Config.glowLevel (old 1 is 4, old 2 and 3 are 5); `dockGlow` is gone from config.json.
+- Colours: GlowColour.all, sixteen round the colour wheel. Orange is the blackbody lamp as before
+  (cooling through red); every other is its swatch in linear light at orange's luminance, no
+  channel over 2.6, so a deep red or blue reaches as far without glaring, and it dims without
+  changing hue (heat squared). The top bar's halo takes the colour but not the level, as it
+  marks focus.
+- Sheet: out/levels-colours.png (emulator): levels 1 to 5 in orange, then six colours at 5.
+
+## Earlier status: the M1 ladder (2026-10-31)
 
 - The user meant their two picks to be combined: k01 (K0) too bright, m01 too dim. Of the six
   candidates they like M1 best, and asked for M1 lit brighter in steps 0 to 6, "glass lit from

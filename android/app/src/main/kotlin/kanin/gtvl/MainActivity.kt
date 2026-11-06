@@ -165,6 +165,10 @@ class MainActivity : FlutterActivity() {
                     sounds.play(arg!!)
                     result.success(null)
                 }
+                "soundOf" -> {
+                    sounds.play(call.argument<String>("set")!!, call.argument<String>("event")!!)
+                    result.success(null)
+                }
                 "updateInfo" -> result.success(updater.about())
                 "checkUpdate" -> inBackground(result) {
                     updater.check(call.argument("path")!!, call.argument<Number>("size")!!.toLong(), call.argument("sha256")!!)

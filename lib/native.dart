@@ -195,6 +195,9 @@ abstract final class Native {
   /// that way), or press (OK).
   static Future<void> sound(String event) => _main.invokeMethod('sound', event);
 
+  /// Plays [event] in the sound set [set], in use or not: a theme tried in settings.
+  static Future<void> soundOf(String set, String event) => _main.invokeMethod('soundOf', {'set': set, 'event': event});
+
   /// Opens a system settings screen, e.g. "android.settings.WIFI_SETTINGS".
   static Future<void> openSettings([String? action]) => _main.invokeMethod('settings', action);
 

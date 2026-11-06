@@ -13,8 +13,18 @@ import 'native.dart';
 /// that moves nothing (at the end of a row) or changes a value (a slider)
 /// makes no sound, and neither does holding OK for a menu.
 abstract final class Sounds {
-  /// The sets, as (value, label): the TV's own sounds, GTVL's test pop, none.
-  static const sets = [('android', 'Android'), ('pop', 'Pop'), ('off', 'Off')];
+  /// The sets, as (value, label): the TV's own sounds, GTVL's own (each
+  /// `assets/sounds/<set>`, made by tool/sounds), none.
+  static const sets = [
+    ('android', 'Android'),
+    ('pop', 'Pop'),
+    ('wood', 'Wood'),
+    ('glass', 'Glass'),
+    ('drop', 'Drop'),
+    ('click', 'Click'),
+    ('chime', 'Chime'),
+    ('off', 'Off'),
+  ];
 
   static final _arrows = {
     LogicalKeyboardKey.arrowUp: 'up',
@@ -68,8 +78,28 @@ abstract final class Sounds {
 
   static void _onFocus() {
     final arrow = _arrow;
-    if (arrow == null || FocusManager.instance.primaryFocus == _from) return;
+    final focus = FocusManager.instance.primaryFocus;
+    if (arrow == null || focus == _from) return;
     _arrow = null;
-    if (_clock.elapsed - _at < _window) _play(arrow);
+    if (_clock.elapsed - _at >= _window) return;
+    // Moving onto a theme in settings plays that theme, even with sounds off.
+    final tried = focus?.context?.findAncestorWidgetOfExactType<SoundPreview>()?.set;
+    if (tried != null) {
+      Native.soundOf(tried, arrow);
+    } else {
+      _play(arrow);
+    }
   }
+}
+
+/// Moving focus onto [child] plays the move sound of the set [set] instead
+/// of the one in use: a theme being tried in settings.
+class SoundPreview extends StatelessWidget {
+  const SoundPreview({super.key, required this.set, required this.child});
+
+  final String set;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child;
 }

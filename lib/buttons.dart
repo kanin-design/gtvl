@@ -1,3 +1,50 @@
+/// A remote connected now, as Native.buttons lists it: its id (vendor and
+/// product), its name, the buttons Android says it has, and whether it has
+/// sent GTVL a key.
+typedef Remote = ({String id, String name, List<String> keys, bool used});
+
+/// Whether the button service is on, and the remotes connected now.
+typedef ButtonState = ({bool on, List<Remote> remotes});
+
+/// The remotes [connected] now and any with changes kept from before in
+/// [remaps], by id: each one's name and buttons.
+Map<String, (String, Set<String>)> remotesOf(List<Remote> connected, Remaps remaps) {
+  final remotes = <String, (String, Set<String>)>{
+    for (final remote in connected) remote.id: (remote.name, {...remote.keys}),
+  };
+  for (final (id, name, keys) in remaps.saved) {
+    final (_, known) = remotes.putIfAbsent(id, () => (name, <String>{}));
+    known.addAll(keys);
+  }
+  return remotes;
+}
+
+/// [action] as the remapper names it: an app by [appName] (null for an app
+/// that's gone: its package); null is Default.
+String actionLabel(String? action, String? Function(String package) appName) {
+  if (action == null) return 'Default';
+  if (action == 'nothing') return 'Nothing';
+  if (action.startsWith('app:')) return appName(action.substring(4)) ?? action.substring(4);
+  for (final (_, actions) in actionGroups) {
+    for (final (value, label) in actions) {
+      if (value == action) return label;
+    }
+  }
+  return action;
+}
+
+/// What [key] on [remote] does instead, in a few words; null when nothing.
+String? changeSummary(Remaps remaps, String remote, String key, String? Function(String package) appName) =>
+    switch (remaps.changes(remote, key)) {
+      [] => null,
+      [('press', final action)] => actionLabel(action, appName),
+      [(final slot, final action)] => '${slotLabel(slot)}: ${actionLabel(action, appName)}',
+      final changes => '${changes.length} changes',
+    };
+
+/// [slot] as the remapper names it: Press, Hold or Double press.
+String slotLabel(String slot) => slots.firstWhere((s) => s.$1 == slot).$2;
+
 /// A remote's button, by Android's name for it ("BUTTON_12"), as GTVL lists it.
 class ButtonInfo {
   const ButtonInfo(this.label, {this.replay = false, this.holdOnly = false});
@@ -199,6 +246,28 @@ class Remaps {
     } else {
       slots[slot] = action;
     }
+  }
+
+  /// Sets [slot] of [key] as the remapper does: a button whose own press
+  /// can't be made again (see ButtonInfo.replay) loses its hold and double
+  /// press with its changed press.
+  void assign(String remote, String name, String key, String slot, String? action) {
+    set(remote, name, key, slot, action);
+    if (slot == 'press' && action == null && !buttonInfo(remote, key).replay) {
+      set(remote, name, key, 'hold', null);
+      set(remote, name, key, 'double', null);
+    }
+  }
+
+  /// Whether [slot] of [key] can be changed: Home and Back keep their press,
+  /// and have no double press; a hold or a double press needs the button's
+  /// own press to be one GTVL can make again after waiting to tell them
+  /// apart, or the press changed.
+  bool canChange(String remote, String key, String slot) {
+    final info = buttonInfo(remote, key);
+    if (slot == 'press') return !info.holdOnly;
+    if (info.holdOnly) return slot == 'hold';
+    return info.replay || action(remote, key, 'press') != null;
   }
 
   /// Keeps [key] listed under [remote], changed or not.

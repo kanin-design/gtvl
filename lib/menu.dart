@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import 'apps.dart';
 import 'native.dart';
+import 'panel.dart';
 import 'services.dart';
 import 'tile.dart';
 import 'ui.dart';
@@ -20,9 +21,9 @@ class MenuItem {
   final bool destructive;
 }
 
-/// A centred frosted-glass menu: a header, groups of rows split by a
-/// full-width hairline (rows within a group by an inset one), and an
-/// optional centred action at the bottom. Focus fills a row as in settings.
+/// A menu on GTVL's pop-up [Panel]: groups of rows split by a full-width
+/// hairline (rows within a group by an inset one), and an optional centred
+/// action at the bottom. Focus fills a row as in settings.
 class GlassMenu extends StatefulWidget {
   const GlassMenu({super.key, required this.title, this.subtitle, this.leading, required this.groups, this.footer});
 
@@ -71,58 +72,28 @@ class _GlassMenuState extends State<GlassMenu> {
         );
       }
     }
-    return Center(
-      child: SizedBox(
-        width: 360,
-        child: Glass(
-          tint: const Color(0xA61C1C1E),
-          sigma: 30,
-          radius: BorderRadius.circular(22),
-          rim: true,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-                child: Column(
-                  children: [
-                    if (widget.leading case final leading?) ...[leading, const SizedBox(height: 8)],
-                    Text(
-                      widget.title,
-                      textAlign: TextAlign.center,
-                      style: Look.body.copyWith(fontWeight: FontWeight.w600),
-                    ),
-                    // A sentence or two reads better from the left.
-                    if (widget.subtitle case final subtitle?)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Prose(
-                          subtitle,
-                          textAlign: subtitle.length > 80 ? TextAlign.left : TextAlign.center,
-                          style: Look.small.copyWith(height: 1.4),
-                        ),
-                      ),
-                  ],
-                ),
+    return Panel(
+      leading: widget.leading,
+      title: widget.title,
+      subtitle: widget.subtitle,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: FocusTraversalGroup(
+              policy: smoothTraversal,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Column(mainAxisSize: MainAxisSize.min, children: rows),
               ),
-              const Hairline(),
-              Flexible(
-                child: FocusTraversalGroup(
-                  policy: smoothTraversal,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: rows),
-                  ),
-                ),
-              ),
-              if (widget.footer case final footer?) ...[
-                const Hairline(),
-                Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: _MenuRow(footer, centered: true)),
-              ],
-            ],
+            ),
           ),
-        ),
+          if (widget.footer case final footer?) ...[
+            const Hairline(),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: _MenuRow(footer, centered: true)),
+          ],
+        ],
       ),
     );
   }
@@ -197,26 +168,24 @@ class _MenuRow extends StatelessWidget {
 /// can do. TVs rarely open straight to its switch, so it says where that is.
 Future<void> showButtonsPrompt(BuildContext context) {
   final navigator = Navigator.of(context);
-  return navigator.push(
-    overlayRoute(
-      barrier: const Color(0x59000000),
-      (context) => GlassMenu(
-        leading: const Icon(Icons.settings_remote_outlined, size: 30, color: Look.white),
-        title: 'Turn on button remapping',
-        subtitle:
-            'In Android settings, go to Device Preferences › Accessibility › Services › GTVL buttons, '
-            'and turn it on. On Google TV, Accessibility is under System. Android will warn that GTVL could see '
-            'what you type: GTVL only acts on the buttons you change, and never reads the screen.',
-        groups: [
-          [
-            MenuItem('Open Android settings', () {
-              navigator.pop();
-              Native.buttonSettings();
-            }, icon: Icons.open_in_new),
-          ],
+  return showPanel(
+    context,
+    (context) => GlassMenu(
+      leading: const Icon(Icons.settings_remote_outlined, size: 30, color: Look.white),
+      title: 'Turn on button remapping',
+      subtitle:
+          'In Android settings, go to Device Preferences › Accessibility › Services › GTVL buttons, '
+          'and turn it on. On Google TV, Accessibility is under System. Android will warn that GTVL could see '
+          'what you type: GTVL only acts on the buttons you change, and never reads the screen.',
+      groups: [
+        [
+          MenuItem('Open Android settings', () {
+            navigator.pop();
+            Native.buttonSettings();
+          }, icon: Icons.open_in_new),
         ],
-        footer: MenuItem('Not now', navigator.pop),
-      ),
+      ],
+      footer: MenuItem('Not now', navigator.pop),
     ),
   );
 }
@@ -231,46 +200,44 @@ Future<void> showAppMenu(BuildContext context, AppInfo app, {VoidCallback? onMov
     action();
   }
 
-  return navigator.push(
-    overlayRoute(barrier: const Color(0x59000000), (context) {
-      final inDock = s.apps.inDock(app.package);
-      return GlassMenu(
-        leading: SizedBox(
-          width: 96,
-          height: 54,
-          child: ClipRRect(borderRadius: BorderRadius.circular(8), child: TileFace(app)),
-        ),
-        title: app.label,
-        groups: [
-          [
-            MenuItem(
-              'Open',
-              () => then(() async {
-                if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.label}");
-              }),
-              icon: Icons.open_in_new,
-            ),
-            // A filled star while the app is a favourite, in the dock.
-            MenuItem(
-              'Favourite',
-              () => then(() => s.apps.toggleDock(app.package)),
-              icon: inDock ? Icons.star_rounded : Icons.star_outline_rounded,
-            ),
-            if (onMove != null) MenuItem('Move', () => then(onMove), icon: Icons.open_with),
-            MenuItem('Hide', () => then(() => s.apps.hide(app.package)), icon: Icons.visibility_off_outlined),
-          ],
-          [MenuItem('App info', () => then(() => Native.appInfo(app.package)), icon: Icons.info_outline)],
+  return showPanel(context, (context) {
+    final inDock = s.apps.inDock(app.package);
+    return GlassMenu(
+      leading: SizedBox(
+        width: 96,
+        height: 54,
+        child: ClipRRect(borderRadius: BorderRadius.circular(8), child: TileFace(app)),
+      ),
+      title: app.label,
+      groups: [
+        [
+          MenuItem(
+            'Open',
+            () => then(() async {
+              if (!await Native.launch(app.package)) s.notice.show("Couldn't open ${app.label}");
+            }),
+            icon: Icons.open_in_new,
+          ),
+          // A filled star while the app is a favourite, in the dock.
+          MenuItem(
+            'Favourite',
+            () => then(() => s.apps.toggleDock(app.package)),
+            icon: inDock ? Icons.star_rounded : Icons.star_outline_rounded,
+          ),
+          if (onMove != null) MenuItem('Move', () => then(onMove), icon: Icons.open_with),
+          MenuItem('Hide', () => then(() => s.apps.hide(app.package)), icon: Icons.visibility_off_outlined),
         ],
-        // Android won't uninstall an app built into the TV.
-        footer: app.system
-            ? null
-            : MenuItem(
-                'Uninstall',
-                () => then(() => Native.uninstall(app.package)),
-                icon: Icons.delete_outline_rounded,
-                destructive: true,
-              ),
-      );
-    }),
-  );
+        [MenuItem('App info', () => then(() => Native.appInfo(app.package)), icon: Icons.info_outline)],
+      ],
+      // Android won't uninstall an app built into the TV.
+      footer: app.system
+          ? null
+          : MenuItem(
+              'Uninstall',
+              () => then(() => Native.uninstall(app.package)),
+              icon: Icons.delete_outline_rounded,
+              destructive: true,
+            ),
+    );
+  });
 }

@@ -7,10 +7,14 @@ import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
 import 'buttons.dart';
+import 'colour_picker.dart';
+import 'glow.dart';
+import 'home.dart' show DockPreview;
 import 'media.dart';
 import 'menu.dart' show showButtonsPrompt;
 import 'native.dart';
 import 'plex.dart';
+import 'remapper.dart';
 import 'services.dart';
 import 'sounds.dart';
 import 'ui.dart';
@@ -77,7 +81,7 @@ const _tints = [
 const _tintStrengths = [(0.0, 'Clear'), (0.05, 'Light'), (0.08, 'Medium'), (0.16, 'Strong'), (0.32, 'Dense')];
 const _lineWidths = [(0.0, 'None'), (1.0, 'Hairline'), (1.5, 'Thin'), (2.5, 'Bold')];
 const _lineBrightness = [(0.06, 'Faint'), (0.12, 'Soft'), (0.24, 'Bright'), (0.45, 'White')];
-const _glows = [(0, 'Off'), (1, '1'), (2, '2'), (3, '3')];
+const _glows = [(0, 'Off'), (1, '1'), (2, '2'), (3, '3'), (4, '4'), (5, '5')];
 const _sceneNames = {'space': 'Space', 'underwater': 'Underwater', 'cities': 'Cities', 'landscapes': 'Landscapes'};
 const _iconNames = {'settings': 'Settings', 'network': 'Network', 'vpn': 'VPN'};
 
@@ -202,7 +206,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   final _firstFiles = <String, Future<String?>>{};
 
   /// Whether the button service is on, and the remotes connected, once asked.
-  ({bool on, List<({String id, String name, List<String> keys, bool used})> remotes})? _buttons;
+  ButtonState? _buttons;
   StreamSubscription<Object?>? _buttonEvents;
 
   /// Coming back from Android settings, where the button service is turned on.
@@ -320,6 +324,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   /// A level of [options] with a check on the current one, which it opens on.
   /// Choosing applies at once and stays, so the change shows behind the panel.
+  ///
+  /// With [trial], the setting it names in Services.dockTrial: the dock's
+  /// preview shows each choice as focus reaches it. [wrap] puts each choice's
+  /// row in more, as a theme's sound to play as focus reaches it.
   void _choose<T>(
     String title,
     List<(T, String)> options,
@@ -328,24 +336,34 @@ class _SettingsPanelState extends State<SettingsPanel> {
     List<Color> Function(T value)? swatch,
     bool Function(T value)? enabled,
     String? note,
+    String? trial,
+    Widget Function(T value, Widget row)? wrap,
   }) => _push(
     _Page(title, () {
       final now = current();
       return [
         for (final (value, label) in options)
-          _Row(
-            label,
-            checked: value == now,
-            swatch: swatch?.call(value),
-            enabled: enabled?.call(value) ?? true,
-            onPressed: () {
-              apply(value);
-              s.config.changed();
-            },
+          (wrap ?? (T _, Widget row) => row)(
+            value,
+            _Row(
+              label,
+              checked: value == now,
+              swatch: swatch?.call(value),
+              enabled: enabled?.call(value) ?? true,
+              onFocusChange: trial == null
+                  ? null
+                  : (focused) {
+                      if (focused) s.dockTrial.value = {trial: value};
+                    },
+              onPressed: () {
+                apply(value);
+                s.config.changed();
+              },
+            ),
           ),
         if (note != null) _Note(note),
       ];
-    }),
+    }, onClose: trial == null ? null : _endDockTrial),
     focus: _label(options, current()),
   );
 
@@ -395,70 +413,92 @@ class _SettingsPanelState extends State<SettingsPanel> {
     // At most two folded levels show; older ones make way.
     final folded = _pages.length <= 1 ? <_Page>[] : _pages.sublist((_pages.length - 3).clamp(0, 99), _pages.length - 1);
     final open = _section != null;
+    final width = open ? railWidth + folded.length * foldedWidth + pageWidth : listWidth;
     return PopScope(
       canPop: !open && _moving == null,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _back();
       },
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: AnimatedContainer(
-          duration: Look.medium,
-          curve: Look.ease,
-          width: open ? railWidth + folded.length * foldedWidth + pageWidth : listWidth,
-          height: double.infinity,
-          child: Glass(
-            tint: const Color(0xA6141416),
-            sigma: 40,
-            border: const Border(right: BorderSide(color: Look.hairline)),
-            child: ListenableBuilder(
-              listenable: Listenable.merge([s.config, s.apps, s.status, s.plex, s.appRows, s.updates]),
-              builder: (context, _) => Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AnimatedContainer(
-                    duration: Look.medium,
-                    curve: Look.ease,
-                    width: open ? railWidth : listWidth,
-                    child: FocusScope(node: _rail, onKeyEvent: _onRailKey, child: _sections(open, listWidth)),
-                  ),
-                  if (open)
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _Breadcrumb([for (final page in _pages) page.title]),
-                          Expanded(
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                for (final page in folded) ...[
-                                  const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
-                                  SizedBox(
-                                    width: foldedWidth - 1,
-                                    child: ExcludeFocus(child: _column(page, folded: true)),
-                                  ),
-                                ],
-                                if (folded.isNotEmpty)
-                                  const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
-                                Expanded(
-                                  child: FocusScope(
-                                    node: _active,
-                                    onKeyEvent: _onPageKey,
-                                    child: _column(_pages.last, folded: false),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+      child: Stack(
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AnimatedContainer(
+              duration: Look.medium,
+              curve: Look.ease,
+              width: width,
+              height: double.infinity,
+              child: Glass(
+                tint: const Color(0xA6141416),
+                sigma: 40,
+                border: const Border(right: BorderSide(color: Look.hairline)),
+                child: ListenableBuilder(
+                  listenable: Listenable.merge([s.config, s.apps, s.status, s.plex, s.appRows, s.updates]),
+                  builder: (context, _) => Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      AnimatedContainer(
+                        duration: Look.medium,
+                        curve: Look.ease,
+                        width: open ? railWidth : listWidth,
+                        child: FocusScope(node: _rail, onKeyEvent: _onRailKey, child: _sections(open, listWidth)),
                       ),
-                    ),
-                ],
+                      if (open)
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _Breadcrumb([for (final page in _pages) page.title]),
+                              Expanded(
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (final page in folded) ...[
+                                      const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
+                                      SizedBox(
+                                        width: foldedWidth - 1,
+                                        child: ExcludeFocus(child: _column(page, folded: true)),
+                                      ),
+                                    ],
+                                    if (folded.isNotEmpty)
+                                      const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
+                                    Expanded(
+                                      child: FocusScope(
+                                        node: _active,
+                                        onKeyEvent: _onPageKey,
+                                        child: _column(_pages.last, folded: false),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+          // The dock as these settings leave it, beside them while they are the dock's.
+          AnimatedPositioned(
+            duration: Look.medium,
+            curve: Look.ease,
+            left: width + 32,
+            right: 32,
+            top: 0,
+            bottom: 0,
+            child: ExcludeFocus(
+              child: AnimatedSwitcher(
+                duration: Look.medium,
+                child: _section == _Section.dock
+                    ? const Align(alignment: Alignment(0, -0.2), child: DockPreview())
+                    : const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1087,13 +1127,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
         'Size',
         value: _label(_sizes, c.dockSize),
         chevron: true,
-        onPressed: () => _choose('Size', _sizes, () => c.dockSize, (v) => c.dockSize = v),
+        onPressed: () => _choose('Size', _sizes, () => c.dockSize, (v) => c.dockSize = v, trial: 'dockSize'),
       ),
       _Row(
         'Shape',
         value: _label(_shapes, c.tileShape),
         chevron: true,
-        onPressed: () => _choose('Shape', _shapes, () => c.tileShape, (v) => c.tileShape = v),
+        onPressed: () => _choose('Shape', _shapes, () => c.tileShape, (v) => c.tileShape = v, trial: 'tileShape'),
       ),
       _Row(
         'Arrange',
@@ -1143,18 +1183,56 @@ class _SettingsPanelState extends State<SettingsPanel> {
       ),
       _Row(
         'Glow',
-        value: _label(_glows, c.dockGlow),
+        value: _label(_glows, c.glowLevel),
+        swatch: c.glowLevel > 0 ? [GlowColour.of(c.glowColour).swatch] : null,
         chevron: true,
-        onPressed: () => _choose(
-          'Glow',
-          _glows,
-          () => c.dockGlow,
-          (v) => c.dockGlow = v,
-          note: 'How brightly the glass glows behind the app in focus: 1 is the faintest, 3 the brightest.',
-        ),
+        onPressed: () => _push(_Page('Glow', _glowRows, onClose: _endDockTrial), focus: _label(_glows, c.glowLevel)),
       ),
       _Row('Glass', chevron: true, onPressed: () => _push(_Page('Glass', _glassRows))),
       const _Note('Size, shape, spacing and corners apply in the dock and in All apps.'),
+    ];
+  }
+
+  /// The dock's glow: how bright, and in which colour.
+  List<Widget> _glowRows() {
+    final c = s.config;
+    final colour = GlowColour.of(c.glowColour);
+    return [
+      const _Header('Brightness'),
+      for (final (level, label) in _glows)
+        _Row(
+          label,
+          checked: c.glowLevel == level,
+          onFocusChange: (focused) {
+            if (focused) s.dockTrial.value = {'glowLevel': level};
+          },
+          onPressed: () {
+            c.glowLevel = level;
+            c.changed();
+          },
+        ),
+      const _Header('Colour'),
+      _Row(
+        colour.name,
+        swatch: [colour.swatch],
+        chevron: true,
+        onFocusChange: (focused) {
+          if (focused) s.dockTrial.value = const {};
+        },
+        onPressed: () => showColourPicker(
+          context,
+          current: c.glowColour,
+          onFocused: (id) => s.dockTrial.value = {'glowColour': id},
+          onPicked: (id) {
+            c.glowColour = id;
+            c.changed();
+          },
+        ).whenComplete(_endDockTrial),
+      ),
+      const _Note(
+        "How brightly the glass glows behind the app in focus, from 1, the faintest, to 5, and in which colour. "
+        "The top bar's icons light up in the colour too.",
+      ),
     ];
   }
 
@@ -1262,7 +1340,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
         'Blur',
         value: _label(_blurs, c.glassBlur),
         chevron: true,
-        onPressed: () => _choose('Blur', _blurs, () => c.glassBlur, (v) => c.glassBlur = v),
+        onPressed: () => _choose('Blur', _blurs, () => c.glassBlur, (v) => c.glassBlur = v, trial: 'glassBlur'),
       ),
       _Row(
         'Tint',
@@ -1281,17 +1359,31 @@ class _SettingsPanelState extends State<SettingsPanel> {
         'Edges',
         value: _label(_lineWidths, c.lineWidth),
         chevron: true,
-        onPressed: () => _choose('Edges', _lineWidths, () => c.lineWidth, (v) => c.lineWidth = v),
+        onPressed: () => _choose('Edges', _lineWidths, () => c.lineWidth, (v) => c.lineWidth = v, trial: 'lineWidth'),
       ),
       if (c.lineWidth > 0)
         _Row(
           'Edge brightness',
           value: _label(_lineBrightness, c.lineAlpha),
           chevron: true,
-          onPressed: () => _choose('Edge brightness', _lineBrightness, () => c.lineAlpha, (v) => c.lineAlpha = v),
+          onPressed: () => _choose(
+            'Edge brightness',
+            _lineBrightness,
+            () => c.lineAlpha,
+            (v) => c.lineAlpha = v,
+            trial: 'lineAlpha',
+          ),
         ),
       const _Note('Changes show on the dock at once. Less blur is lighter work for the TV.'),
     ];
+  }
+
+  /// Shows the dock's preview in the settings themselves again, after this frame.
+  void _endDockTrial() {
+    final trial = s.dockTrial;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) => trial.value = const {})
+      ..scheduleFrame();
   }
 
   /// Hides the clock again, after this frame: the home screen rebuilds for it.
@@ -1475,45 +1567,26 @@ class _SettingsPanelState extends State<SettingsPanel> {
     if (mounted && FocusManager.instance.primaryFocus == _active) _focusRow();
   }
 
-  /// [action], or while the button service is off, asking to turn it on.
-  VoidCallback _whenOn(VoidCallback action) =>
-      () => (_buttons?.on ?? false) ? action() : showButtonsPrompt(context);
-
-  /// The remotes connected now and any with changes kept from before, by
-  /// id: each one's name and buttons.
-  Map<String, (String, Set<String>)> _remotes() {
-    final remotes = <String, (String, Set<String>)>{
-      for (final remote in _buttons?.remotes ?? const <({String id, String name, List<String> keys, bool used})>[])
-        remote.id: (remote.name, {...remote.keys}),
-    };
-    for (final (id, name, keys) in Remaps(s.config.remotes).saved) {
-      final (_, known) = remotes.putIfAbsent(id, () => (name, <String>{}));
-      known.addAll(keys);
-    }
-    return remotes;
-  }
-
-  /// A way to find any button, the buttons already changed, then each remote
-  /// as a row of its own: TVs list several input devices, most of them no
-  /// remote anyone holds, each claiming every button there is. The one that
-  /// has sent GTVL keys comes first.
+  /// The way into the button remapper, whether its service is on, and the
+  /// buttons changed so far, each opening the remapper on itself.
   List<Widget> _buttonRows() {
     final state = _buttons;
     if (state == null) return const [_Note('Looking for remotes…')];
-    final remotes = _remotes();
     final remaps = Remaps(s.config.remotes);
-    final used = {
-      for (final remote in state.remotes)
-        if (remote.used) remote.id,
-    };
+    final remotes = remotesOf(state.remotes, remaps);
+    String? appName(String package) => s.apps.all.where((app) => app.package == package).firstOrNull?.label;
     final changed = [
       for (final MapEntry(key: id, value: (name, keys)) in remotes.entries)
         for (final key in inButtonOrder(keys))
-          if (remaps.changes(id, key).isNotEmpty) (id, name, key),
+          if (remaps.changes(id, key).isNotEmpty) (remote: id, name: name, key: key),
     ];
-    int rank(String id) => used.contains(id) ? 0 : (changed.any((button) => button.$1 == id) ? 1 : 2);
-    final order = remotes.keys.toList()..sort((a, b) => rank(a) - rank(b));
     return [
+      _Row(
+        'Change a button',
+        note: 'Press it on your remote, or pick it from a list',
+        chevron: true,
+        onPressed: () => showRemapper(context),
+      ),
       _Row(
         'Remapping',
         value: state.on ? 'On' : 'Off',
@@ -1521,226 +1594,43 @@ class _SettingsPanelState extends State<SettingsPanel> {
         chevron: true,
         onPressed: state.on ? Native.buttonSettings : () => showButtonsPrompt(context),
       ),
-      // First: the quickest way to any button, the ones no remote lists too.
-      _Row(
-        'Find a button',
-        note: 'OK, then press the button on your remote',
-        chevron: true,
-        onPressed: _whenOn(_findButton),
-      ),
       if (changed.isNotEmpty) ...[
         const _Header('Changed'),
-        for (final (id, name, key) in changed)
-          _buttonRow(id, name, key, note: remotes.length > 1 ? remoteName(name) : null),
+        for (final button in changed)
+          _Row(
+            buttonInfo(button.remote, button.key).label,
+            key: ValueKey('${button.remote} ${button.key}'),
+            value: _short(changeSummary(remaps, button.remote, button.key, appName) ?? ''),
+            note: remotes.length > 1 ? remoteName(button.name) : null,
+            chevron: true,
+            onPressed: () => showRemapper(context, button: button),
+          ),
       ],
-      if (remotes.isNotEmpty) const _Header('Remotes'),
-      for (final id in order)
-        _Row(
-          remoteName(remotes[id]!.$1),
-          key: ValueKey('remote $id'),
-          note: used.contains(id) ? 'In use' : null,
-          chevron: true,
-          onPressed: () => _push(_Page(remoteName(remotes[id]!.$1), () => _remoteRows(id))),
-        ),
-      if (remotes.isEmpty) const _Note('No remote lists its buttons. Find a button by pressing it.'),
       const _Note("OK, the arrows and Power can't be changed."),
     ];
   }
 
-  /// Every button of the remote [id], as Android lists them, and any found on it.
-  List<Widget> _remoteRows(String id) {
-    final remote = _remotes()[id];
-    if (remote == null) return const [_Note("This remote isn't connected.")];
-    final (name, keys) = remote;
-    return [
-      for (final key in inButtonOrder(keys)) _buttonRow(id, name, key),
-      const _Note('Android lists every button this kind of remote could have, so some may not be on yours.'),
-    ];
-  }
-
-  /// A button, with what it does instead, if anything.
-  Widget _buttonRow(String remote, String name, String key, {String? note}) {
-    final info = buttonInfo(remote, key);
-    final changes = Remaps(s.config.remotes).changes(remote, key);
-    final value = switch (changes) {
-      [] => null,
-      [('press', final action)] => _actionLabel(action),
-      [(final slot, final action)] => '${_slotLabel(slot)}: ${_actionLabel(action)}',
-      _ => '${changes.length} changes',
-    };
-    return _Row(
-      info.label,
-      key: ValueKey('$remote $key'),
-      value: value == null ? null : _short(value),
-      note: note,
-      chevron: true,
-      onPressed: _whenOn(() => _push(_Page(info.label, () => _slotRows(remote, name, key)))),
-    );
-  }
-
-  /// What [key] on [remote] does when pressed, held or pressed twice.
-  List<Widget> _slotRows(String remote, String name, String key) {
-    final info = buttonInfo(remote, key);
-    final remaps = Remaps(s.config.remotes);
-    // A hold or double press holds the button back until it is clear which
-    // it was; then its own press must be made again, or be changed.
-    final timed = info.replay || remaps.action(remote, key, 'press') != null;
-    return [
-      for (final (slot, label) in slots)
-        if (!info.holdOnly || slot != 'double')
-          _Row(
-            label,
-            value: _short(_actionLabel(remaps.action(remote, key, slot))),
-            chevron: true,
-            enabled: slot == 'press' ? !info.holdOnly : timed,
-            onPressed: () => _pickAction(remote, name, key, slot, label),
-          ),
-      if (remaps.changes(remote, key).isNotEmpty)
-        _Row(
-          'Reset',
-          onPressed: () {
-            remaps.reset(remote, key);
-            _remapsChanged();
-            _focusRow();
-          },
-        ),
-      if (info.holdOnly)
-        _Note(
-          "Pressing ${info.label} always does its usual job, so you can't get stuck. "
-          'Only holding it can do something else.',
-        ),
-      if (!timed)
-        _Note(
-          'Hold and Double press need Press changed first: after waiting to tell them apart, '
-          "GTVL can't send ${info.label}'s own press.",
-        ),
-      if (timed && !info.holdOnly)
-        const _Note('With Double press set, a single press waits a moment in case another press follows.'),
-      if (remote == shieldRemote && key == 'MENU')
-        const _Note("If the Shield's own Customize menu button setting is in use, leave ☰ alone here."),
-    ];
-  }
-
-  /// Picks what [slot] of [key] does: its own thing, nothing, an app, or one
-  /// of [actionGroups].
-  void _pickAction(String remote, String name, String key, String slot, String title) {
-    String? current() => Remaps(s.config.remotes).action(remote, key, slot);
-    void set(String? action) => _setAction(remote, name, key, slot, action);
-    _push(
-      _Page(title, () {
-        final now = current();
-        return [
-          _Row('Default', note: 'What the button normally does', checked: now == null, onPressed: () => set(null)),
-          _Row('Nothing', checked: now == 'nothing', onPressed: () => set('nothing')),
-          _Row(
-            'Open an app',
-            value: now != null && now.startsWith('app:') ? _short(_actionLabel(now)) : null,
-            chevron: true,
-            onPressed: () => _choose(
-              'Open an app',
-              [for (final app in s.apps.all) ('app:${app.package}', app.label)],
-              () => current() ?? '',
-              set,
-            ),
-          ),
-          for (final (group, actions) in actionGroups)
-            _Row(
-              group,
-              value: actions.any((action) => action.$1 == now) ? _short(_actionLabel(now)) : null,
-              chevron: true,
-              onPressed: () => _choose(group, actions, () => current() ?? '', set),
-            ),
-        ];
-      }),
-    );
-  }
-
-  void _setAction(String remote, String name, String key, String slot, String? action) {
-    final remaps = Remaps(s.config.remotes)..set(remote, name, key, slot, action);
-    // A button whose own press can't be made again loses its hold and double
-    // press with its changed press.
-    if (slot == 'press' && action == null && !buttonInfo(remote, key).replay) {
-      remaps
-        ..set(remote, name, key, 'hold', null)
-        ..set(remote, name, key, 'double', null);
-    }
-    _remapsChanged();
-  }
-
-  /// Saves the remaps, and hands them to the button service at once.
-  void _remapsChanged() {
-    s.config.changed();
-    Native.remap(s.config.remotes);
-  }
-
-  /// [action] as the picker names it: an app by its name; null is Default.
-  String _actionLabel(String? action) {
-    if (action == null) return 'Default';
-    if (action == 'nothing') return 'Nothing';
-    if (action.startsWith('app:')) {
-      final package = action.substring(4);
-      return s.apps.all.where((app) => app.package == package).firstOrNull?.label ?? package;
-    }
-    for (final (_, actions) in actionGroups) {
-      for (final (value, label) in actions) {
-        if (value == action) return label;
-      }
-    }
-    return action;
-  }
-
-  static String _slotLabel(String slot) => slots.firstWhere((s) => s.$1 == slot).$2;
-
-  /// Waits for a press of any button, then opens that button's page. A button
-  /// GTVL didn't list stays listed under its remote from then on.
-  void _findButton() {
-    var gaveUp = false;
-    final page = _Page(
-      'Find a button',
-      () => [
-        _Note(
-          gaveUp
-              ? 'Nothing was pressed in time. Go back and try again.'
-              : 'Press the button on your remote. Back stops looking.',
-        ),
-      ],
-      onClose: Native.stopFinding,
-    );
-    _push(page);
-    Native.findButton().then((found) {
-      if (!mounted || _pages.lastOrNull != page) return;
-      if (found == null) {
-        setState(() => gaveUp = true);
-        return;
-      }
-      Remaps(s.config.remotes).keep(found.remote, found.name, found.key);
-      _remapsChanged();
-      _refreshButtons();
-      // The button's own page takes this one's place.
-      setState(_pages.removeLast);
-      final label = buttonInfo(found.remote, found.key).label;
-      _push(_Page(label, () => _slotRows(found.remote, found.name, found.key)), from: 'Find a button');
-    });
-  }
-
-  /// The version, its updates from GitHub, and credits.
-  /// The sounds of moving and pressing OK: the choice of set.
+  /// The sounds of moving and pressing OK: which theme plays them.
   List<Widget> _soundRows() {
     final c = s.config;
     return [
-      for (final (value, label) in Sounds.sets)
-        _Row(
-          label,
-          checked: c.sounds == value,
-          onPressed: () {
-            c.sounds = value;
-            c.changed();
-          },
+      _Row(
+        'Theme',
+        value: _label(Sounds.sets, c.sounds),
+        chevron: true,
+        onPressed: () => _choose(
+          'Theme',
+          Sounds.sets,
+          () => c.sounds,
+          (v) => c.sounds = v,
+          note: 'Moving onto a theme plays it.',
+          wrap: (set, row) => SoundPreview(set: set, child: row),
         ),
+      ),
       const _Note(
-        'The sounds of moving around and pressing OK. Android: the TV\'s own sounds, the ones its home screen makes. '
-        'They play only while Android\'s System sounds switch is on (Settings, Device Preferences, Sound). '
-        'Pop: a soft pop made for GTVL, a first test of its own sounds.',
+        "The sounds of moving around and pressing OK. Android: the TV's own sounds, the ones its home screen "
+        "makes, which play only while Android's System sounds switch is on (Settings, Device Preferences, "
+        "Sound). The others are GTVL's own.",
       ),
     ];
   }

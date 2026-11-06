@@ -47,6 +47,11 @@ class Services {
   /// A clock face being tried in settings, by its id: the clock shows in it, beside the panel.
   final clockTrial = ValueNotifier<String?>(null);
 
+  /// Dock settings being tried in settings, by their names in config.json
+  /// ({'dockSize': 'l'}): the dock's preview beside the panel shows them in
+  /// place of the settings themselves.
+  final dockTrial = ValueNotifier<Map<String, Object?>>(const {});
+
   /// A short line about something that didn't happen ("Couldn't open
   /// Plex"), shown above the dock for a few seconds.
   final notice = Notice();

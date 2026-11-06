@@ -548,9 +548,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final names = c.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, step) = _centres(g, apps.length, c.dockAlign);
     // With the glow off, the apps take focus as they do elsewhere.
-    final look = GlowLook.of(c.dockGlow);
+    final strength = GlowLook.strength(c.glowLevel);
+    final look = strength == null ? null : GlowLook.look;
     _molten.step = step;
-    if (look != null) _molten.look = look;
+    if (strength != null) _molten.set(GlowColour.of(c.glowColour), strength);
     return FocusScope(
       node: _dock,
       onKeyEvent: _onDockKey,
@@ -665,7 +666,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   /// The light the dock's lamp throws on the wallpaper round it, [fade]d as the dock slides away.
   Widget _bleed(_Geometry g, double fade) {
-    if (GlowLook.of(s.config.dockGlow) == null) return const SizedBox.shrink();
+    if (s.config.glowLevel <= 0) return const SizedBox.shrink();
     final apps = s.apps.dock;
     final names = s.config.dockNames ? _Geometry.labelHeight : 0.0;
     final (first, _) = _centres(g, apps.length, s.config.dockAlign);
@@ -846,7 +847,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget? _topIcon(String id) {
     final hidden = s.config.topHidden.contains(id);
-    final glow = GlowLook.of(s.config.dockGlow) != null;
+    final glow = s.config.glowLevel > 0 ? GlowColour.of(s.config.glowColour) : null;
     switch (id) {
       case 'settings':
         // Always there so Up can reach it: a hidden gear shows only while
@@ -884,7 +885,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 }
 
 /// A top-bar icon, straight on the wallpaper. In focus it becomes a small dark
-/// tile in front of the dock's orange, as a dock app does.
+/// tile in front of the dock's glow, as a dock app does.
 class TopIcon extends StatelessWidget {
   const TopIcon({
     super.key,
@@ -892,7 +893,7 @@ class TopIcon extends StatelessWidget {
     required this.onPressed,
     this.collapsed = false,
     this.badge = false,
-    this.glow = true,
+    this.glow,
   });
 
   final IconData icon;
@@ -904,27 +905,30 @@ class TopIcon extends StatelessWidget {
   /// A dot on its corner: something waits behind it.
   final bool badge;
 
-  /// The orange shows behind it in focus; the dock's glow setting.
-  final bool glow;
+  /// The glow's colour behind it in focus; null with the dock's glow off.
+  final GlowColour? glow;
 
   static const _chip = _HomeScreenState._chip;
 
   /// How much a tile in focus is enlarged.
   static const _lift = 1.08;
 
-  /// What the tile's edge catches of the orange behind it.
-  static final _rim = () {
+  /// What the tile's edge catches of the glow behind it, by its colour.
+  static final _rims = <GlowColour, Color>{};
+
+  static Color _rim(GlowColour colour) => _rims.putIfAbsent(colour, () {
     final lamp = _chip / 2 * GlowLook.lampScale;
     final light = GlowLook.rim * GlowHalo.look.light(_chip / 2 * _lift, 0, lamp, lamp, lamp);
-    final (r, g, b) = GlowLook.colour(1);
+    final (r, g, b) = colour.light(1);
     int channel(double c) => (255 * GlowLook.tone(light * c)).round();
     return Color.fromARGB(255, channel(r), channel(g), channel(b));
-  }();
+  });
 
   @override
   Widget build(BuildContext context) => Pressable(
     onPressed: onPressed,
     builder: (context, focused) {
+      final glow = this.glow;
       final tile = AnimatedScale(
         scale: focused ? _lift : 1,
         duration: Look.fast,
@@ -940,8 +944,8 @@ class TopIcon extends StatelessWidget {
             border: Border.all(
               color: !focused
                   ? const Color(0x00FFFFFF)
-                  : glow
-                  ? _rim
+                  : glow != null
+                  ? _rim(glow)
                   : Look.focusEdge,
             ),
           ),
@@ -962,7 +966,7 @@ class TopIcon extends StatelessWidget {
       );
       final item = Padding(
         padding: const EdgeInsets.symmetric(horizontal: _HomeScreenState._chipGap / 2),
-        child: !glow
+        child: glow == null
             ? tile
             // On like a bulb as focus reaches it, out fast as focus leaves.
             : TweenAnimationBuilder<double>(
@@ -974,6 +978,7 @@ class TopIcon extends StatelessWidget {
                       ? null
                       : _HaloPainter(
                           heat,
+                          glow,
                           radius: _chip / 2 * GlowLook.lampScale,
                           ratio: MediaQuery.devicePixelRatioOf(context),
                         ),
@@ -989,17 +994,18 @@ class TopIcon extends StatelessWidget {
   );
 }
 
-/// Places the orange's one image, added to the wallpaper, at [heat].
+/// Places the glow's one image, added to the wallpaper, at [heat], in [colour].
 class _HaloPainter extends CustomPainter {
-  _HaloPainter(this.heat, {required this.radius, required this.ratio});
+  _HaloPainter(this.heat, this.colour, {required this.radius, required this.ratio});
 
   final double heat, radius, ratio;
+  final GlowColour colour;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final image = GlowHalo.image(radius, ratio);
+    final image = GlowHalo.image(radius, ratio, colour);
     if (image == null) return;
-    final (r, g, b) = GlowLook.fade(heat);
+    final (r, g, b) = colour.fade(heat);
     if (r <= 0) return;
     final side = 2 * (radius + GlowHalo.reach);
     canvas.drawImageRect(
@@ -1014,7 +1020,8 @@ class _HaloPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_HaloPainter old) => old.heat != heat || old.radius != radius || old.ratio != ratio;
+  bool shouldRepaint(_HaloPainter old) =>
+      old.heat != heat || old.colour != colour || old.radius != radius || old.ratio != ratio;
 }
 
 /// Light on the dock's glass, from above: an edge along its top, brightest a
@@ -1078,14 +1085,21 @@ class _Molten extends ChangeNotifier implements ValueListenable<Glow?> {
   final embers = <(double, double)>[];
 
   @override
-  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat, step, _look);
+  Glow? get value => _heat < 0.005 ? null : Glow(_at, _heat, step, look, _colour, _strength);
 
-  /// The look it is drawn in (the glow setting's step), set as the dock lays out.
-  GlowLook get look => _look;
-  GlowLook _look = GlowLook.steps.first;
-  set look(GlowLook look) {
-    if (look == _look) return;
-    _look = look;
+  /// The look it is drawn in.
+  GlowLook get look => GlowLook.look;
+
+  /// Its colour and strength (the glow settings), set as the dock lays out.
+  GlowColour get colour => _colour;
+  GlowColour _colour = GlowColour.of(GlowColour.orange);
+  double get strength => _strength;
+  double _strength = 1;
+
+  void set(GlowColour colour, double strength) {
+    if (colour == _colour && strength == _strength) return;
+    _colour = colour;
+    _strength = strength;
     // A tick shows it, on the tiles' edges too.
     _start();
   }
@@ -1206,6 +1220,8 @@ class _MoltenPainter extends CustomPainter {
     if (spots.isEmpty) return;
     final sprite = light.glass((
       look: light.look,
+      colour: light.colour,
+      strength: light.strength,
       hw: tile.width * GlowLook.lampScale / 2,
       hh: tile.height * GlowLook.lampScale / 2,
       r: radius * GlowLook.lampScale,
@@ -1268,6 +1284,8 @@ class _BleedPainter extends CustomPainter {
     if (spots.isEmpty) return;
     final sprite = light.wall((
       look: light.look,
+      colour: light.colour,
+      strength: light.strength,
       hw: tile.width * GlowLook.lampScale / 2,
       hh: tile.height * GlowLook.lampScale / 2,
       r: radius * GlowLook.lampScale,
@@ -1295,4 +1313,192 @@ class _BleedPainter extends CustomPainter {
       old.room != room ||
       old.fade != fade ||
       old.ratio != ratio;
+}
+
+/// The dock as settings will leave it, in a window of its own beside them: a
+/// stretch of its glass at the screen's own scale, an app lit in the middle
+/// and its neighbours either side, drawn by the dock's own parts. A choice
+/// being tried in settings (Services.dockTrial) shows in place of the
+/// setting, so each one can be seen before it is chosen.
+class DockPreview extends StatefulWidget {
+  const DockPreview({super.key});
+
+  @override
+  State<DockPreview> createState() => _DockPreviewState();
+}
+
+class _DockPreviewState extends State<DockPreview> with SingleTickerProviderStateMixin {
+  late final Services s = Services.of(context);
+  late final _molten = _Molten(this);
+
+  /// The bleed's painter follows a scroll; this one never scrolls.
+  final _still = ScrollController();
+
+  /// Apps shown, and the lit one among them, in the middle.
+  static const _count = 5, _lit = 2;
+
+  /// Room above and below the glass, for the light its lamp throws there.
+  static const _room = 44.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _molten.focus(_lit);
+  }
+
+  @override
+  void dispose() {
+    _molten.dispose();
+    _still.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([s.config, s.dockTrial, s.apps]),
+    builder: (context, _) {
+      final c = s.config;
+      final tried = s.dockTrial.value;
+      T pick<T>(String key, T setting) => switch (tried[key]) {
+        final T value => value,
+        _ => setting,
+      };
+      final names = pick('dockNames', c.dockNames);
+      final g = _Geometry(
+        MediaQuery.sizeOf(context),
+        dockSize: pick('dockSize', c.dockSize),
+        square: pick('tileShape', c.tileShape) == 'square',
+        spacing: pick('dockSpacing', c.dockSpacing),
+        corners: pick('tileCorners', c.tileCorners),
+        room: pick('dockRoom', c.dockRoom),
+        names: names,
+      );
+      final strength = GlowLook.strength(pick('glowLevel', c.glowLevel));
+      final cell = g.tileWidth + g.gap;
+      _molten.step = cell;
+      if (strength != null) _molten.set(GlowColour.of(pick('glowColour', c.glowColour)), strength);
+      final label = names ? _Geometry.labelHeight : 0.0;
+      final tile = Size(g.tileWidth, g.tileHeight);
+      final ratio = MediaQuery.devicePixelRatioOf(context);
+      final apps = [...s.apps.dock, ...s.apps.all.where((app) => !s.apps.inDock(app.package))].take(_count).toList();
+      return LayoutBuilder(
+        builder: (context, box) {
+          // The row of apps, placed so the lit one sits in the middle.
+          final left = box.maxWidth / 2 - (_lit + 0.5) * cell;
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: SizedBox(
+              height: g.dockHeight + 2 * _room,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: gradients[c.gradient.clamp(0, gradients.length - 1)].$2,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (strength != null)
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _BleedPainter(
+                          _molten,
+                          _still,
+                          left: left,
+                          first: cell / 2,
+                          tile: tile,
+                          radius: g.radius,
+                          raise: label / 2,
+                          room: _room,
+                          fade: 1,
+                          ratio: ratio,
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: _room,
+                    height: g.dockHeight,
+                    child: Glass(
+                      sigma: math.max(pick('glassBlur', c.glassBlur), 16),
+                      tint: const Color(0x801C1C1E),
+                      vibrancy: 1.35,
+                      child: CustomPaint(
+                        painter: _BandLight(
+                          line: pick('lineWidth', c.lineWidth),
+                          alpha: pick('lineAlpha', c.lineAlpha),
+                        ),
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Positioned(
+                              left: left,
+                              top: 0,
+                              bottom: 0,
+                              width: _count * cell,
+                              child: CustomPaint(
+                                painter: strength == null
+                                    ? null
+                                    : _MoltenPainter(
+                                        _molten,
+                                        first: cell / 2,
+                                        tile: tile,
+                                        radius: g.radius,
+                                        raise: label / 2,
+                                        ratio: ratio,
+                                      ),
+                                child: Row(
+                                  children: [
+                                    for (var i = 0; i < apps.length; i++)
+                                      Padding(
+                                        padding: EdgeInsets.symmetric(horizontal: g.gap / 2),
+                                        child: SizedBox(
+                                          width: g.tileWidth,
+                                          height: g.tileHeight + label,
+                                          child: AppTile(
+                                            app: apps[i],
+                                            square: g.square,
+                                            radius: g.radius,
+                                            label: names,
+                                            lit: i == _lit,
+                                            glow: strength == null ? null : _molten,
+                                            index: i,
+                                            onLaunch: () {},
+                                            onMenu: () {},
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // A rim like the panels', over it all.
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: const Color(0x33FFFFFF)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
 }

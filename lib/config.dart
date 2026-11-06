@@ -49,7 +49,8 @@ class Config extends ChangeNotifier {
       dockNames = v.get('dockNames'),
       tileShape = v.get('tileShape'),
       dockAlign = v.get('dockAlign'),
-      dockGlow = v.get('dockGlow'),
+      glowLevel = _glowLevel(v),
+      glowColour = v.get('glowColour'),
       sounds = v.get('sounds'),
       remotes = v.map('remotes'),
       showsOff = {...v.strings('showsOff')},
@@ -146,8 +147,11 @@ class Config extends ChangeNotifier {
   String dockAlign;
 
   /// How strongly the glass glows behind the dock app in focus: 0 for no
-  /// glow, else a level of GlowLook.steps from 1, the faintest.
-  int dockGlow;
+  /// glow, else a level of GlowLook.levels from 1, the faintest, to 5.
+  int glowLevel;
+
+  /// The glow's colour, by its id in GlowColour.all.
+  String glowColour;
 
   /// The sounds of moving and pressing OK, by set (see Sounds.sets): android
   /// (the TV's own), one of GTVL's, or off.
@@ -218,7 +222,8 @@ class Config extends ChangeNotifier {
     'dockNames': dockNames,
     'tileShape': tileShape,
     'dockAlign': dockAlign,
-    'dockGlow': dockGlow,
+    'glowLevel': glowLevel,
+    'glowColour': glowColour,
     'sounds': sounds,
     'remotes': remotes,
     'showsOff': showsOff.toList(),
@@ -243,6 +248,14 @@ class Config extends ChangeNotifier {
       debugPrint('Could not save config: $e');
     }
   }
+
+  /// The glow had three levels (dockGlow): its 2, the default, is 5 now,
+  /// as is the brighter 3; its 1 is 4.
+  static int _glowLevel(_Values v) => switch ((v.saved['glowLevel'], v.saved['dockGlow'])) {
+    (final int level, _) => level.clamp(0, 5),
+    (_, final int old) => const [0, 4, 5, 5][old.clamp(0, 3)],
+    _ => v.get('glowLevel'),
+  };
 
   /// Sizes were small, medium and large, and small already looked medium:
   /// each keeps its look under its new name.

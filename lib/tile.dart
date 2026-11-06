@@ -13,19 +13,27 @@ import 'ui.dart';
 /// The dock's light, as a tile sees it: which tile the lamp behind the glass
 /// is behind, by index; how hot it is (1 in focus, more while it flares,
 /// less while it comes on or goes out); the distance from one app's centre
-/// to the next; and its look.
+/// to the next; and its look, colour and strength (the glow setting's level).
 class Glow {
-  const Glow(this.at, this.heat, this.step, this.look);
+  const Glow(this.at, this.heat, this.step, this.look, this.colour, this.strength);
 
   final double at, heat, step;
   final GlowLook look;
+  final GlowColour colour;
+  final double strength;
 
   @override
   bool operator ==(Object other) =>
-      other is Glow && other.at == at && other.heat == heat && other.step == step && other.look == look;
+      other is Glow &&
+      other.at == at &&
+      other.heat == heat &&
+      other.step == step &&
+      other.look == look &&
+      other.colour == colour &&
+      other.strength == strength;
 
   @override
-  int get hashCode => Object.hash(at, heat, step, look);
+  int get hashCode => Object.hash(at, heat, step, look, colour, strength);
 }
 
 /// An app on the home screen: its TV banner, or its icon and name on a card;
@@ -54,6 +62,7 @@ class AppTile extends StatelessWidget {
     this.onDown,
     this.glow,
     this.index = 0,
+    this.lit = false,
   });
 
   final AppInfo app;
@@ -78,6 +87,9 @@ class AppTile extends StatelessWidget {
   final ValueListenable<Glow?>? glow;
   final int index;
 
+  /// Shown as in focus without having it: the app lit in the dock's preview.
+  final bool lit;
+
   /// Lifted, a tile casts two shadows, a close one and a wide soft one, as a
   /// real object does; at rest it lies flat on the glass.
   static const _lifted = [
@@ -94,7 +106,8 @@ class AppTile extends StatelessWidget {
     onFocusChange: onFocusChange,
     onDown: onDown,
     dip: true,
-    builder: (context, focused) {
+    builder: (context, hasFocus) {
+      final focused = hasFocus || lit;
       final lift = focused || moving;
       final corners = BorderRadius.circular(radius);
       // Squares get smooth, continuous corners, like Apple's app icons.
@@ -236,10 +249,10 @@ class _Light extends CustomPainter {
     final centre = (index - glow.at) * glow.step;
     final half = size.width * scale / 2;
     // As the glow behind it: drawn at the heat of focus, then faded with the heat.
-    final (cr, cg, cb) = GlowLook.colour(1);
-    final (fr, fg, fb) = GlowLook.fade(glow.heat);
+    final (cr, cg, cb) = glow.colour.light(1);
+    final (fr, fg, fb) = glow.colour.fade(glow.heat);
     Color caught(double dx) {
-      final light = GlowLook.rim * glow.look.light(dx, 0, hw, hh, r);
+      final light = GlowLook.rim * glow.strength * glow.look.light(dx, 0, hw, hh, r);
       int channel(double c, double f) => (255 * math.min(GlowLook.tone(light * c) * f, 1.0)).round();
       return Color.fromARGB(255, channel(cr, fr), channel(cg, fg), channel(cb, fb));
     }
