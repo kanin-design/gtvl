@@ -115,8 +115,8 @@ the defaults in `assets/defaults.json`.
 
 `wallpapers/` (pictures) and `videos/` hold the wallpapers GTVL offers to
 download. Each file needs a 480 × 270 JPEG preview in the folder's `thumbs/`,
-named like it (`videos/gold-v16.mp4` → `videos/thumbs/gold-v16.jpg`); the
-gallery shows the file's name, so `gold-v16.mp4` reads "Gold v16".
+named like it (`videos/gold-4k.mp4` → `videos/thumbs/gold-4k.jpg`); the
+gallery shows the file's name, so `aurora.jpg` reads "Aurora".
 
 ## Credits
 
