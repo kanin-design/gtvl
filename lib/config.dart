@@ -38,8 +38,8 @@ class Config extends ChangeNotifier {
       dimming = v.number('dimming'),
       saverMinutes = v.get('saverMinutes'),
       glassBlur = v.number('glassBlur'),
-      glassTint = v.get('glassTint'),
-      glassTintAlpha = v.number('glassTintAlpha'),
+      tintColour = v.get('tintColour'),
+      tintLevel = v.get<int>('tintLevel').clamp(1, 10),
       lineWidth = v.number('lineWidth'),
       lineAlpha = v.number('lineAlpha'),
       dockSize = _dockSize(v.get('dockSize')),
@@ -119,11 +119,13 @@ class Config extends ChangeNotifier {
   /// The screensaver shows after this many minutes with no button pressed; 0 never.
   int saverMinutes;
 
-  /// The dock's glass: blur radius (0 for none), tint colour and strength, and
-  /// the lines along its edges (width 0 for none).
+  /// The dock's glass: how much a still picture behind it is blurred (dp, 0
+  /// for none; films can't be), its tint (by its id in Tints.all) and how
+  /// strong the tint is (1 to 10, 5 half covering what is behind), and the
+  /// lines along its edges (width 0 for none).
   double glassBlur;
-  int glassTint;
-  double glassTintAlpha;
+  String tintColour;
+  int tintLevel;
   double lineWidth;
   double lineAlpha;
 
@@ -211,8 +213,8 @@ class Config extends ChangeNotifier {
     'dimming': dimming,
     'saverMinutes': saverMinutes,
     'glassBlur': glassBlur,
-    'glassTint': glassTint,
-    'glassTintAlpha': glassTintAlpha,
+    'tintColour': tintColour,
+    'tintLevel': tintLevel,
     'lineWidth': lineWidth,
     'lineAlpha': lineAlpha,
     'dockSize': dockSize,

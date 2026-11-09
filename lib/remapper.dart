@@ -226,8 +226,9 @@ class _RemapperState extends State<_Remapper> {
                 ),
                 if (footer.isNotEmpty) ...[
                   const Hairline(),
+                  // Side by side, edge to edge, so a button's band runs to the panel's sides.
                   Padding(
-                    padding: const EdgeInsets.all(6),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Row(children: [for (final button in footer) Expanded(child: button)]),
                   ),
                 ],
@@ -696,50 +697,53 @@ class _Item extends StatelessWidget {
     builder: (context, focused) {
       final color = Look.white.withValues(alpha: !enabled ? 0.4 : (focused ? 1 : 0.88));
       final app = this.app;
-      return AnimatedContainer(
-        duration: Look.fast,
-        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-        decoration: BoxDecoration(
-          color: focused ? Look.focusFill : const Color(0x00FFFFFF),
-          border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        constraints: const BoxConstraints(minHeight: 44),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          children: [
-            if (icon != null) ...[Icon(icon, size: 18, color: color), const SizedBox(width: 12)],
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: Look.body.copyWith(color: color)),
-                  if (note != null)
-                    Text(note!, style: Look.small.copyWith(fontSize: 12, color: const Color(0x8CFFFFFF))),
-                ],
-              ),
-            ),
-            if (app != null) ...[
-              SizedBox.square(
-                dimension: 22,
-                child: ClipRRect(borderRadius: BorderRadius.circular(6), child: TileFace(app, square: true)),
-              ),
-              const SizedBox(width: 8),
-            ],
-            if (value != null)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 150),
-                child: Text(
-                  value!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Look.value.copyWith(color: focused && enabled ? Look.white : const Color(0xB8FFFFFF)),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: FocusBand(
+          focused: focused,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 19, vertical: 7),
+            child: Row(
+              children: [
+                if (icon != null) ...[Icon(icon, size: 18, color: color), const SizedBox(width: 12)],
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label, style: Look.body.copyWith(color: color)),
+                      if (note != null)
+                        Text(note!, style: Look.small.copyWith(fontSize: 12, color: const Color(0x8CFFFFFF))),
+                    ],
+                  ),
                 ),
-              ),
-            if (chevron)
-              Icon(Icons.chevron_right_rounded, size: 20, color: Look.white.withValues(alpha: enabled ? 0.6 : 0.25)),
-          ],
+                if (app != null) ...[
+                  SizedBox.square(
+                    dimension: 22,
+                    child: ClipRRect(borderRadius: BorderRadius.circular(6), child: TileFace(app, square: true)),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                if (value != null)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    child: Text(
+                      value!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Look.value.copyWith(color: focused && enabled ? Look.white : const Color(0xB8FFFFFF)),
+                    ),
+                  ),
+                if (chevron)
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: Look.white.withValues(alpha: enabled ? 0.6 : 0.25),
+                  ),
+              ],
+            ),
+          ),
         ),
       );
     },
@@ -804,49 +808,55 @@ class _Choice extends StatelessWidget {
     dip: true,
     builder: (context, focused) {
       final app = this.app;
-      return AnimatedContainer(
+      // In focus a choice lifts and brightens, as the colour picker's swatches do.
+      return AnimatedScale(
+        scale: focused ? 1.05 : 1,
         duration: Look.fast,
         curve: Look.ease,
-        padding: EdgeInsets.symmetric(horizontal: 8, vertical: app != null ? 10 : 12),
-        decoration: BoxDecoration(
-          color: focused ? Look.focusFill : const Color(0x14FFFFFF),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: chosen ? Look.white : (focused ? Look.focusEdge : const Color(0x00FFFFFF)),
-            width: chosen ? 2 : 1,
+        child: AnimatedContainer(
+          duration: Look.fast,
+          curve: Look.ease,
+          padding: EdgeInsets.symmetric(horizontal: 8, vertical: app != null ? 10 : 12),
+          decoration: BoxDecoration(
+            color: focused ? const Color(0x2EFFFFFF) : const Color(0x14FFFFFF),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: chosen ? Look.white : const Color(0x00FFFFFF), width: chosen ? 2 : 1),
           ),
-        ),
-        child: app != null
-            ? Column(
-                children: [
-                  SizedBox.square(
-                    dimension: 44,
-                    child: ClipRRect(borderRadius: BorderRadius.circular(11), child: TileFace(app, square: true)),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: Look.small.copyWith(fontSize: 12, color: Look.white.withValues(alpha: focused ? 1 : 0.85)),
-                  ),
-                ],
-              )
-            : Row(
-                children: [
-                  Icon(icon, size: 18, color: Look.white.withValues(alpha: focused ? 1 : 0.85)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
+          child: app != null
+              ? Column(
+                  children: [
+                    SizedBox.square(
+                      dimension: 44,
+                      child: ClipRRect(borderRadius: BorderRadius.circular(11), child: TileFace(app, square: true)),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Look.body.copyWith(fontSize: 14, color: Look.white.withValues(alpha: focused ? 1 : 0.88)),
+                      textAlign: TextAlign.center,
+                      style: Look.small.copyWith(fontSize: 12, color: Look.white.withValues(alpha: focused ? 1 : 0.85)),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Icon(icon, size: 18, color: Look.white.withValues(alpha: focused ? 1 : 0.85)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Look.body.copyWith(
+                          fontSize: 14,
+                          color: Look.white.withValues(alpha: focused ? 1 : 0.88),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+        ),
       );
     },
   );
@@ -867,20 +877,16 @@ class _FooterButton extends StatelessWidget {
   Widget build(BuildContext context) => Pressable(
     focusNode: focusNode,
     onPressed: onPressed,
-    builder: (context, focused) => AnimatedContainer(
-      duration: Look.fast,
-      margin: const EdgeInsets.symmetric(horizontal: 3),
-      constraints: const BoxConstraints(minHeight: 40),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: focused ? Look.focusFill : const Color(0x00FFFFFF),
-        border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        label,
-        style: Look.body.copyWith(
-          color: (destructive ? Look.danger : Look.white).withValues(alpha: focused ? 1 : 0.88),
+    builder: (context, focused) => FocusBand(
+      focused: focused,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 40),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: Look.body.copyWith(
+            color: (destructive ? Look.danger : Look.white).withValues(alpha: focused ? 1 : 0.88),
+          ),
         ),
       ),
     ),

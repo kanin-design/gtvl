@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
 import 'buttons.dart';
 import 'colour_picker.dart';
+import 'config.dart' show Config;
 import 'glow.dart';
 import 'home.dart' show DockPreview;
 import 'media.dart';
@@ -24,6 +26,145 @@ import 'wallpaper.dart';
 /// Opens the settings panel from the left.
 Future<void> showSettings(BuildContext context) =>
     Navigator.of(context).push(overlayRoute((_) => const SettingsPanel(), from: const Offset(-0.06, 0)));
+
+/// Hides what [child] has under the settings panel while it is open, so only
+/// the wallpaper shows through the panel's glass. It fades out as the panel
+/// comes in and back as it goes, and keeps to the panel's edge as it moves.
+class UnderSettings extends StatelessWidget {
+  const UnderSettings({super.key, required this.child});
+
+  final Widget child;
+
+  // A layer of its own, so keeping to the edge only moves a clip over it.
+  @override
+  Widget build(BuildContext context) => _Under(child: RepaintBoundary(child: child));
+}
+
+/// Where the settings panel is: its box while it is on screen, and how far
+/// it has come in, from 0, gone, to 1, all there.
+class _Cover extends ChangeNotifier {
+  RenderBox? _panel;
+  double _shown = 0;
+
+  double get shown => _shown;
+  set shown(double shown) {
+    if (shown == _shown) return;
+    _shown = shown;
+    notifyListeners();
+  }
+
+  void _moved() => notifyListeners();
+}
+
+final _cover = _Cover();
+
+/// The panel's box, which tells [_cover] when it comes, goes or changes width.
+class _Covers extends SingleChildRenderObjectWidget {
+  const _Covers({required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderCovers();
+}
+
+class _RenderCovers extends RenderProxyBox {
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _cover._panel = this;
+    _cover._moved();
+  }
+
+  @override
+  void detach() {
+    if (_cover._panel == this) {
+      _cover._panel = null;
+      _cover._moved();
+    }
+    super.detach();
+  }
+
+  @override
+  void performLayout() {
+    final before = hasSize ? size : null;
+    super.performLayout();
+    if (size != before) _cover._moved();
+  }
+}
+
+class _Under extends SingleChildRenderObjectWidget {
+  const _Under({required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderUnder();
+}
+
+class _RenderUnder extends RenderProxyBox {
+  final _clip = LayerHandle<ClipRectLayer>();
+  final _fade = LayerHandle<ShaderMaskLayer>();
+
+  @override
+  bool get isRepaintBoundary => true;
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _cover.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _cover.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  void dispose() {
+    _clip.layer = null;
+    _fade.layer = null;
+    super.dispose();
+  }
+
+  /// Where the panel ends, across this box; 0 while there is none.
+  double get _edge {
+    final panel = _cover._panel;
+    if (_cover.shown == 0 || panel == null || !panel.attached || !panel.hasSize) return 0;
+    return globalToLocal(panel.localToGlobal(Offset(panel.size.width, 0))).dx.clamp(0.0, size.width);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child == null) return;
+    final edge = _edge, shown = _cover.shown;
+    if (edge == 0) {
+      _clip.layer = null;
+      _fade.layer = null;
+      context.paintChild(child, offset);
+    } else if (shown == 1) {
+      // All there: nothing shows under it.
+      _fade.layer = null;
+      _clip.layer = context.pushClipRect(
+        needsCompositing,
+        offset,
+        Rect.fromLTRB(edge, 0, size.width, size.height),
+        super.paint,
+        oldLayer: _clip.layer,
+      );
+    } else {
+      // On its way in or out: what is under it fades as the panel does.
+      _clip.layer = null;
+      final under = Look.white.withValues(alpha: 1 - shown), at = edge / size.width;
+      _fade.layer = (_fade.layer ?? ShaderMaskLayer())
+        ..shader = LinearGradient(
+          colors: [under, under, Look.white, Look.white],
+          stops: [0, at, at, 1],
+        ).createShader(Offset.zero & size)
+        ..maskRect = offset & size
+        ..blendMode = BlendMode.modulate;
+      context.pushLayer(_fade.layer!, super.paint, offset);
+    }
+  }
+}
 
 /// The top level of settings: each opens a page beside it, except Android
 /// settings, which opens the system's own.
@@ -70,15 +211,7 @@ const _arrangements = [
 const _pictureEvery = [(1, 'Every minute'), (5, 'Every 5 minutes'), (15, 'Every 15 minutes'), (60, 'Every hour')];
 const _videoLoops = [(0, 'Once'), (1, 'For 1 minute'), (5, 'For 5 minutes'), (15, 'For 15 minutes')];
 const _blurs = [(0.0, 'Off'), (8.0, 'Subtle'), (16.0, 'Medium'), (24.0, 'Strong'), (40.0, 'Heavy')];
-const _tints = [
-  (0xFFFFFFFF, 'Frost'),
-  (0xFF000000, 'Smoke'),
-  (0xFF1C2A4A, 'Midnight'),
-  (0xFF2E4A3A, 'Sage'),
-  (0xFF4A2E3A, 'Rose'),
-  (0xFF5A4A2E, 'Amber'),
-];
-const _tintStrengths = [(0.0, 'Clear'), (0.05, 'Light'), (0.08, 'Medium'), (0.16, 'Strong'), (0.32, 'Dense')];
+final _tintLevels = [for (var level = 1; level <= 10; level++) (level, '$level')];
 const _lineWidths = [(0.0, 'None'), (1.0, 'Hairline'), (1.5, 'Thin'), (2.5, 'Bold')];
 const _lineBrightness = [(0.06, 'Faint'), (0.12, 'Soft'), (0.24, 'Bright'), (0.45, 'White')];
 const _glows = [(0, 'Off'), (1, '1'), (2, '2'), (3, '3'), (4, '4'), (5, '5')];
@@ -105,14 +238,16 @@ String _short(String text) => text.length <= 16 ? text : '${text.substring(0, 15
 String _label<T>(List<(T, String)> options, T value) =>
     options.firstWhere((option) => option.$1 == value, orElse: () => options.first).$2;
 
-const _focusFill = Look.focusFill;
-const _focusEdge = Look.focusEdge;
-const _openFill = Color(0x17FFFFFF);
 const _soft = Color(0xB8FFFFFF);
 const _quiet = Color(0x99FFFFFF);
 
 /// Notes under rows: quieter than labels, still easy to read.
 const _noteColor = Color(0xA8FFFFFF);
+
+/// A level's rows sit this far in from its column's sides; the band of the
+/// row in focus reaches back out over it, to the column's edges.
+const _side = 10.0;
+const _band = EdgeInsets.symmetric(horizontal: _side);
 
 /// One level of settings: its title and rows. Rows are built afresh each
 /// time, so they always show current values.
@@ -185,13 +320,17 @@ class _SettingsPanelState extends State<SettingsPanel> {
   final _finding = <MediaKind, Future<void>>{};
   final _unreachable = <MediaKind>{};
 
-  /// Downloads under way, as url to how much is done (0 to 1), those the
-  /// user stopped, and those that failed.
-  final _downloading = <String, double>{};
-  final _stopping = <String>{};
-  final _failed = <String>{};
+  /// Files from the collection kept on the TV, by kind, once looked up, each
+  /// with its size in bytes.
+  final _kept = <MediaKind, Map<String, int>>{};
 
-  /// Videos this TV can't play, by url or path.
+  /// Kinds whose renamed files are being given their new names.
+  final _adopting = <MediaKind>{};
+
+  /// Downloads under way when last heard of.
+  int _downloads = 0;
+
+  /// Videos from storage this TV can't play, by path.
   final _unplayable = <String>{};
 
   /// Kinds the user did not allow GTVL to read from storage.
@@ -216,17 +355,46 @@ class _SettingsPanelState extends State<SettingsPanel> {
     },
   );
 
+  /// How settings comes in and goes, which [_cover] passes on to the home screen.
+  Animation<double>? _route;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context)?.animation;
+    if (route == _route) return;
+    _route?.removeListener(_routeMoved);
+    _route = route?..addListener(_routeMoved);
+    _routeMoved();
+  }
+
+  /// On the route's own curve, as the panel fades in and out.
+  void _routeMoved() => _cover.shown = Look.ease.transform(_route?.value ?? 0);
+
   @override
   void initState() {
     super.initState();
     _buttonEvents = Native.events.where((event) => event['type'] == 'buttons').listen((_) => _refreshButtons());
     _lifecycle;
+    _downloads = s.downloads.progress.length;
+    s.downloads.addListener(_downloadsChanged);
+  }
+
+  /// A download moved on, started or ended; one that ended may have left a
+  /// file to keep.
+  void _downloadsChanged() {
+    final before = _downloads;
+    setState(() => _downloads = s.downloads.progress.length);
+    if (_downloads < before) _kept.keys.toList().forEach(_findKept);
   }
 
   @override
   void dispose() {
+    _route?.removeListener(_routeMoved);
+    _cover.shown = 0;
     _closeAll();
     _endClockTrial();
+    s.downloads.removeListener(_downloadsChanged);
     _buttonEvents?.cancel();
     _lifecycle.dispose();
     for (final node in _sectionNodes.values) {
@@ -423,59 +591,61 @@ class _SettingsPanelState extends State<SettingsPanel> {
         children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: AnimatedContainer(
-              duration: Look.medium,
-              curve: Look.ease,
-              width: width,
-              height: double.infinity,
-              child: Glass(
-                tint: const Color(0xA6141416),
-                sigma: 40,
-                border: const Border(right: BorderSide(color: Look.hairline)),
-                child: ListenableBuilder(
-                  listenable: Listenable.merge([s.config, s.apps, s.status, s.plex, s.appRows, s.updates]),
-                  builder: (context, _) => Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      AnimatedContainer(
-                        duration: Look.medium,
-                        curve: Look.ease,
-                        width: open ? railWidth : listWidth,
-                        child: FocusScope(node: _rail, onKeyEvent: _onRailKey, child: _sections(open, listWidth)),
-                      ),
-                      if (open)
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _Breadcrumb([for (final page in _pages) page.title]),
-                              Expanded(
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    for (final page in folded) ...[
-                                      const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
-                                      SizedBox(
-                                        width: foldedWidth - 1,
-                                        child: ExcludeFocus(child: _column(page, folded: true)),
+            // The home screen hides what it has under here (UnderSettings).
+            child: _Covers(
+              child: AnimatedContainer(
+                duration: Look.medium,
+                curve: Look.ease,
+                width: width,
+                height: double.infinity,
+                child: Glass(
+                  tint: const Color(0xC8141416),
+                  border: const Border(right: BorderSide(color: Look.hairline)),
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge([s.config, s.apps, s.status, s.plex, s.appRows, s.updates]),
+                    builder: (context, _) => Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        AnimatedContainer(
+                          duration: Look.medium,
+                          curve: Look.ease,
+                          width: open ? railWidth : listWidth,
+                          child: FocusScope(node: _rail, onKeyEvent: _onRailKey, child: _sections(open, listWidth)),
+                        ),
+                        if (open)
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _Breadcrumb([for (final page in _pages) page.title]),
+                                Expanded(
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      for (final page in folded) ...[
+                                        const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
+                                        SizedBox(
+                                          width: foldedWidth - 1,
+                                          child: ExcludeFocus(child: _column(page, folded: true)),
+                                        ),
+                                      ],
+                                      if (folded.isNotEmpty)
+                                        const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
+                                      Expanded(
+                                        child: FocusScope(
+                                          node: _active,
+                                          onKeyEvent: _onPageKey,
+                                          child: _column(_pages.last, folded: false),
+                                        ),
                                       ),
                                     ],
-                                    if (folded.isNotEmpty)
-                                      const SizedBox(width: 1, child: ColoredBox(color: Look.hairline)),
-                                    Expanded(
-                                      child: FocusScope(
-                                        node: _active,
-                                        onKeyEvent: _onPageKey,
-                                        child: _column(_pages.last, folded: false),
-                                      ),
-                                    ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -537,7 +707,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       // Keyed by level, so a level shown again comes back scrolled where it was.
       child: ListView(
         key: PageStorageKey<_Page>(page),
-        padding: const EdgeInsets.fromLTRB(10, 2, 10, 28),
+        padding: const EdgeInsets.fromLTRB(_side, 2, _side, 28),
         children: page.rows(),
       ),
     );
@@ -668,6 +838,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   Widget _galleryRow(MediaKind kind) {
     void open({required bool show}) {
       _findOnline(kind);
+      _findKept(kind);
       _fromStorage[kind] = [
         for (final path in _chosen(kind))
           if (!_isDownload(path)) path,
@@ -702,7 +873,54 @@ class _SettingsPanelState extends State<SettingsPanel> {
       _online[kind] = found ?? const [];
       if (found == null) _unreachable.add(kind);
     });
+    _adoptRenamed(kind);
   });
+
+  /// Looks up the files of [kind] kept from the collection.
+  Future<void> _findKept(MediaKind kind) async {
+    final kept = await Media.kept(s.files, kind);
+    if (!mounted) return;
+    setState(() => _kept[kind] = kept);
+    _adoptRenamed(kind);
+  }
+
+  /// Where the collection's [item] is kept once downloaded.
+  String _saved(MediaKind kind, OnlineMedia item) => Media.saved(item.url, s.files, kind);
+
+  /// A kept file the collection has renamed since takes its new name, so it
+  /// needn't come again: it is the one file there of its size not kept yet.
+  Future<void> _adoptRenamed(MediaKind kind) async {
+    final online = _online[kind], kept = _kept[kind];
+    if (online == null || online.isEmpty || kept == null || !_adopting.add(kind)) return;
+    final listed = {for (final item in online) _saved(kind, item)};
+    var renamed = false;
+    for (final MapEntry(key: old, value: size) in kept.entries.toList()) {
+      if (listed.contains(old)) continue;
+      final same = [
+        for (final item in online)
+          if (item.size == size && !kept.containsKey(_saved(kind, item)) && !s.downloads.progress.containsKey(item.url))
+            item,
+      ];
+      if (same.length != 1) continue;
+      final path = _saved(kind, same.single);
+      try {
+        await File(old).rename(path);
+      } on FileSystemException {
+        continue;
+      }
+      kept
+        ..remove(old)
+        ..[path] = size;
+      final chosen = _chosen(kind);
+      final at = chosen.indexOf(old);
+      if (at >= 0) chosen[at] = path;
+      renamed = true;
+    }
+    _adopting.remove(kind);
+    if (!renamed) return;
+    s.config.changed();
+    if (mounted) setState(() {});
+  }
 
   /// GTVL's collection and what was chosen from storage, as previews: OK
   /// picks one or drops it. One alone stays on (a video loops); several
@@ -718,6 +936,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
     }
     final several = chosen.length > 1 || chosen.any((path) => !kind.matches(path));
     final shuffle = videos ? c.videoShuffle : c.pictureShuffle;
+    final kept = _kept[kind] ?? const <String, int>{};
+    // Kept files the collection doesn't list: all of them while it can't be reached.
+    final listed = {for (final item in online ?? const <OnlineMedia>[]) _saved(kind, item)};
+    final unlisted = online == null ? const <String>[] : kept.keys.where((path) => !listed.contains(path)).toList();
     return [
       if (chosen.isNotEmpty) ..._useRow(kind.wallpaper),
       _Row('Browse storage', chevron: true, onPressed: () => _openStorage(kind)),
@@ -780,29 +1002,81 @@ class _SettingsPanelState extends State<SettingsPanel> {
             _findOnline(kind);
           },
         )
-      else if (online.isEmpty)
-        const _Note('Nothing in the collection yet.')
-      else
-        ..._grid([for (final item in online) _onlineThumb(kind, item)]),
+      else if (online.isEmpty && unlisted.isEmpty)
+        const _Note('Nothing in the collection yet.'),
+      ..._grid([
+        for (final item in online ?? const <OnlineMedia>[]) _onlineThumb(kind, item),
+        for (final path in unlisted) _keptThumb(kind, path),
+      ]),
       if (fromStorage.isNotEmpty) ...[
         const _Header('From storage'),
         ..._grid([for (final path in fromStorage) _storageThumb(kind, path)]),
       ],
+      if (kept.isNotEmpty)
+        _Row(
+          'Delete downloads',
+          value: _megabytes(kept.values.fold(0, (all, size) => all + size)),
+          chevron: true,
+          onPressed: () => _confirmForget(kind),
+        ),
       _Note(
         videos
             ? 'OK adds a video to the wallpaper, or takes it off. One video loops seamlessly; several take turns, '
-                  'with a crossfade between them. A video from the collection downloads when added; OK again stops it.'
+                  'with a crossfade between them. A video from the collection downloads the first time it is added, '
+                  'and stays on the TV; OK stops a download.'
             : 'OK adds a picture to the wallpaper, or takes it off. Several take turns, with a crossfade between them. '
-                  'A picture from the collection downloads when added; OK again stops it.',
+                  'A picture from the collection downloads the first time it is added, and stays on the TV; '
+                  'OK stops a download.',
       ),
     ];
   }
 
-  /// A file in GTVL's collection, previewed from the collection itself.
+  /// "233 MB", "1.2 GB".
+  static String _megabytes(int bytes) =>
+      bytes >= 1e9 ? '${(bytes / 1e9).toStringAsFixed(1)} GB' : '${(bytes / 1e6).ceil()} MB';
+
+  /// Asks before the files of [kind] kept from the collection are deleted.
+  void _confirmForget(MediaKind kind) => _push(
+    _Page('Delete downloads', () {
+      final kept = _kept[kind] ?? const <String, int>{};
+      return [
+        _Row(
+          'Delete ${kind.count(kept.length)}',
+          value: _megabytes(kept.values.fold(0, (all, size) => all + size)),
+          onPressed: () => _forgetAll(kind),
+        ),
+        _Row('Cancel', onPressed: _back),
+        _Note(
+          '${kind.label} from the collection download again when added. '
+          "${kind.label} from storage aren't deleted.",
+        ),
+      ];
+    }),
+    focus: 'Cancel',
+  );
+
+  /// Deletes every file of [kind] kept from the collection, and takes them
+  /// out of what it shows. A download still coming in stays.
+  Future<void> _forgetAll(MediaKind kind) async {
+    final chosen = _chosen(kind)..removeWhere((path) => path.startsWith('${s.files}/${kind.folder}/'));
+    if (chosen.isEmpty && s.config.wallpaper == kind.wallpaper) s.config.wallpaper = 'gradient';
+    s.config.changed();
+    await Media.forgetAll(
+      s.files,
+      kind,
+      except: {for (final url in s.downloads.progress.keys) '${Media.saved(url, s.files, kind)}.part'},
+    );
+    await _findKept(kind);
+    if (mounted) _back();
+  }
+
+  /// A file in GTVL's collection, previewed from the collection itself, and
+  /// marked while it isn't on the TV yet.
   Widget _onlineThumb(MediaKind kind, OnlineMedia item) {
-    final path = Media.saved(item.url, s.files, kind);
+    final path = _saved(kind, item);
     final picked = _chosen(kind).contains(path);
-    final done = _downloading[item.url];
+    final downloads = s.downloads;
+    final done = downloads.progress[item.url];
     return _Thumb(
       item.name,
       key: ValueKey(item.url),
@@ -816,19 +1090,34 @@ class _SettingsPanelState extends State<SettingsPanel> {
             : const SizedBox.shrink(),
       ),
       checked: picked,
+      // Not while it comes in, before the kept files are known, or when it can't play anyway.
+      toDownload: done == null && !downloads.unplayable.contains(item.url) && !(_kept[kind]?.containsKey(path) ?? true),
       status: switch (item.url) {
-        // A stop takes effect as the next piece arrives, or the wait for it runs out.
-        final url when done != null => _stopping.contains(url) ? 'Stopping…' : 'Downloading',
-        final url when _unplayable.contains(url) => "Can't play on this TV",
-        final url when _failed.contains(url) => "Couldn't download",
+        final url when done != null => downloads.stopping.contains(url) ? 'Stopping…' : 'Downloading',
+        final url when downloads.unplayable.contains(url) => "Can't play on this TV",
+        final url when downloads.failed.contains(url) => "Couldn't download",
         _ => null,
       },
       progress: done,
-      onPressed: _unplayable.contains(item.url)
+      onPressed: downloads.unplayable.contains(item.url)
           ? null
           : done != null
-          ? () => setState(() => _stopping.add(item.url))
+          ? () => downloads.stop(item.url)
           : () => picked ? _drop(kind, path) : _download(kind, item.url),
+    );
+  }
+
+  /// A file kept from the collection that it no longer lists, or can't be
+  /// asked about: previewed from the file.
+  Widget _keptThumb(MediaKind kind, String path) {
+    final picked = _chosen(kind).contains(path);
+    return _Thumb(
+      Media.title(path),
+      key: ValueKey(path),
+      picture: _preview(kind, path),
+      checked: picked,
+      status: _unplayable.contains(path) ? "Can't play on this TV" : null,
+      onPressed: () => picked ? _drop(kind, path) : _pickPlayable(kind, path),
     );
   }
 
@@ -871,13 +1160,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }
 
   /// Takes [path] out of what [kind] shows. A download from the collection
-  /// is deleted; it comes again if picked again.
+  /// stays on the TV, to pick again without waiting.
   void _drop(MediaKind kind, String path) {
     final chosen = _chosen(kind)..remove(path);
     // With nothing left of this kind the gradient shows: the list says so too.
     if (chosen.isEmpty && s.config.wallpaper == kind.wallpaper) s.config.wallpaper = 'gradient';
     s.config.changed();
-    if (_isDownload(path)) Media.forget(path);
   }
 
   /// Drops [file] from [folder], chosen whole: its other [files] stay, picked
@@ -991,48 +1279,19 @@ class _SettingsPanelState extends State<SettingsPanel> {
     },
   );
 
-  /// Downloads a file from the collection, unless it is here already, and
-  /// picks it.
+  /// Picks a file from the collection, downloading it first unless it is
+  /// kept already.
   Future<void> _download(MediaKind kind, String url) async {
-    setState(() {
-      _downloading[url] = 0;
-      _failed.remove(url);
-      // A stop pressed just as the last download of it ended.
-      _stopping.remove(url);
-    });
-    try {
-      final path = await Media.download(
-        url,
-        s.files,
-        kind,
-        stop: () => _stopping.contains(url),
-        onProgress: (done) {
-          // A step per percent, not a rebuild per chunk.
-          if (mounted && (done * 100).floor() > (_downloading[url]! * 100).floor()) {
-            setState(() => _downloading[url] = done);
-          }
-        },
-      );
-      if (kind == MediaKind.videos && !await Native.canPlay(path)) {
-        _unplayable.add(url);
-        await Media.forget(path);
-        return;
-      }
-      // Stopped while the last piece came in, or while the video was checked.
-      if (_stopping.contains(url)) {
-        await Media.forget(path);
-        return;
-      }
-      _pick(kind, path);
-    } on DownloadStopped {
-      // The user stopped it: nothing to report.
-    } on Exception {
-      _failed.add(url);
-    } finally {
-      _downloading.remove(url);
-      _stopping.remove(url);
-      if (mounted) setState(() {});
+    final saved = Media.saved(url, s.files, kind);
+    final path = (_kept[kind]?.containsKey(saved) ?? false) ? saved : await s.downloads.fetch(url, s.files, kind);
+    if (path == null) return;
+    if (kind == MediaKind.videos && !await Native.canPlay(path)) {
+      await Media.forget(path);
+      s.downloads.unplayable.add(url);
+      if (mounted) _findKept(kind);
+      return;
     }
+    _pick(kind, path);
   }
 
   List<Widget> _aerialRows() {
@@ -1221,7 +1480,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
         },
         onPressed: () => showColourPicker(
           context,
+          colours: [for (final glow in GlowColour.all) (id: glow.id, name: glow.name, colour: glow.swatch)],
           current: c.glowColour,
+          preview: LitTile.new,
           onFocused: (id) => s.dockTrial.value = {'glowColour': id},
           onPicked: (id) {
             c.glowColour = id;
@@ -1333,27 +1594,56 @@ class _SettingsPanelState extends State<SettingsPanel> {
     );
   }
 
+  /// The dock's glass: blur over a still picture, its tint and how strong,
+  /// and its edges.
   List<Widget> _glassRows() {
     final c = s.config;
+    final still = _stillWallpaper(c);
+    final tint = Tints.of(c.tintColour);
     return [
       _Row(
         'Blur',
         value: _label(_blurs, c.glassBlur),
+        note: still ? null : 'Only over a picture or a gradient',
         chevron: true,
-        onPressed: () => _choose('Blur', _blurs, () => c.glassBlur, (v) => c.glassBlur = v, trial: 'glassBlur'),
+        enabled: still,
+        onPressed: () => _choose(
+          'Blur',
+          _blurs,
+          () => c.glassBlur,
+          (v) => c.glassBlur = v,
+          note: 'How much the glass blurs the picture behind it.',
+        ),
       ),
       _Row(
         'Tint',
-        value: _label(_tints, c.glassTint),
-        swatch: [Color(c.glassTint)],
+        value: tint.name,
+        swatch: [tint.colour],
         chevron: true,
-        onPressed: () => _choose('Tint', _tints, () => c.glassTint, (v) => c.glassTint = v, swatch: (v) => [Color(v)]),
+        onPressed: () => showColourPicker(
+          context,
+          colours: Tints.all,
+          current: c.tintColour,
+          preview: (colour) => TintedGlass(colour, level: c.tintLevel),
+          onFocused: (id) => s.dockTrial.value = {'tintColour': id},
+          onPicked: (id) {
+            c.tintColour = id;
+            c.changed();
+          },
+        ).whenComplete(_endDockTrial),
       ),
       _Row(
         'Tint strength',
-        value: _label(_tintStrengths, c.glassTintAlpha),
+        value: '${c.tintLevel}',
         chevron: true,
-        onPressed: () => _choose('Tint strength', _tintStrengths, () => c.glassTintAlpha, (v) => c.glassTintAlpha = v),
+        onPressed: () => _choose(
+          'Tint strength',
+          _tintLevels,
+          () => c.tintLevel,
+          (v) => c.tintLevel = v,
+          trial: 'tintLevel',
+          note: 'How much the tint covers what is behind the glass: 1 barely, 5 half, 10 all of it.',
+        ),
       ),
       _Row(
         'Edges',
@@ -1374,9 +1664,21 @@ class _SettingsPanelState extends State<SettingsPanel> {
             trial: 'lineAlpha',
           ),
         ),
-      const _Note('Changes show on the dock at once. Less blur is lighter work for the TV.'),
+      _Note(
+        still
+            ? 'Changes show on the dock at once.'
+            : "Changes show on the dock at once. Films play on the TV's own video layer, which no TV lets an app "
+                  'blur, so over a film the glass tints it without blurring.',
+      ),
     ];
   }
+
+  /// Whether the wallpaper holds still, a picture or a gradient, so glass can blur it.
+  static bool _stillWallpaper(Config c) => switch (c.wallpaper) {
+    'gradient' || 'image' => true,
+    'video' => c.videos.isEmpty,
+    _ => false,
+  };
 
   /// Shows the dock's preview in the settings themselves again, after this frame.
   void _endDockTrial() {
@@ -1719,7 +2021,8 @@ class _Breadcrumb extends StatelessWidget {
 }
 
 /// A top-level entry: an icon and its name. Folded into the rail, only the
-/// icon shows. Focus gives a soft fill; the open section a fainter one.
+/// icon shows. Focus marks it as it marks rows (FocusBand), its band out to
+/// the panel's edge; the section open beside the rail keeps the bar.
 class _SectionItem extends StatelessWidget {
   const _SectionItem({
     required this.section,
@@ -1755,73 +2058,61 @@ class _SectionItem extends StatelessWidget {
     },
     builder: (context, focused) => Align(
       alignment: Alignment.centerLeft,
-      child: AnimatedContainer(
-        duration: Look.medium,
-        curve: Look.ease,
-        width: width,
-        height: 46,
-        margin: const EdgeInsets.symmetric(vertical: 1),
-        clipBehavior: Clip.hardEdge,
-        decoration: BoxDecoration(
-          color: focused ? _focusFill : (selected ? _openFill : const Color(0x00FFFFFF)),
-          border: Border.all(color: focused ? _focusEdge : const Color(0x00FFFFFF)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Stack(
-          children: [
-            OverflowBox(
-              alignment: Alignment.centerLeft,
-              maxWidth: double.infinity,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(color: const Color(0x14FFFFFF), borderRadius: BorderRadius.circular(9)),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      clipBehavior: Clip.none,
-                      children: [
-                        Icon(section.icon, size: 20, color: focused || selected ? Look.white : _soft),
-                        if (badge) const Positioned(right: -2, top: -2, child: Badge()),
-                      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: FocusBand(
+          focused: focused,
+          marked: selected && collapsed,
+          // Past the rail's or the list's padding to the panel's edges; the
+          // bar stays off the screen's edge, where the rail marks the open section.
+          overhang: const EdgeInsets.symmetric(horizontal: 8),
+          barInset: 8,
+          child: AnimatedContainer(
+            duration: Look.medium,
+            curve: Look.ease,
+            width: width,
+            height: 46,
+            child: ClipRect(
+              child: OverflowBox(
+                alignment: Alignment.centerLeft,
+                maxWidth: double.infinity,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(color: const Color(0x14FFFFFF), borderRadius: BorderRadius.circular(9)),
+                      child: Stack(
+                        alignment: Alignment.center,
+                        clipBehavior: Clip.none,
+                        children: [
+                          Icon(section.icon, size: 20, color: focused || selected ? Look.white : _soft),
+                          if (badge) const Positioned(right: -2, top: -2, child: Badge()),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 13),
-                  AnimatedOpacity(
-                    opacity: collapsed ? 0 : 1,
-                    duration: Look.fast,
-                    child: Text(section.label, style: Look.body.copyWith(color: focused ? Look.white : _soft)),
-                  ),
-                ],
-              ),
-            ),
-            // The section open beside the rail, marked at its edge.
-            Positioned(
-              left: 0,
-              top: 14,
-              bottom: 14,
-              child: AnimatedOpacity(
-                opacity: selected && collapsed ? 1 : 0,
-                duration: Look.fast,
-                child: Container(
-                  width: 3,
-                  decoration: BoxDecoration(color: Look.white, borderRadius: BorderRadius.circular(2)),
+                    const SizedBox(width: 13),
+                    AnimatedOpacity(
+                      opacity: collapsed ? 0 : 1,
+                      duration: Look.fast,
+                      child: Text(section.label, style: Look.body.copyWith(color: focused ? Look.white : _soft)),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     ),
   );
 }
 
-/// A settings row: plain until focused, then a soft fill. In a folded column
-/// it shrinks to its label, and the row that opened the next level keeps a
-/// faint fill.
+/// A settings row: plain until focused, then marked by the band (FocusBand).
+/// In a folded column it shrinks to its label, and the row that opened the
+/// next level keeps the bar.
 class _Row extends StatelessWidget {
   const _Row(
     this.label, {
@@ -1880,68 +2171,71 @@ class _Row extends StatelessWidget {
         }
         return KeyEventResult.ignored;
       },
-      builder: (context, focused) => AnimatedContainer(
-        duration: Look.fast,
-        curve: Look.ease,
-        margin: const EdgeInsets.symmetric(vertical: 1),
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-        decoration: BoxDecoration(
-          color: focused ? _focusFill : (active ? _openFill : const Color(0x00FFFFFF)),
-          border: Border.all(color: focused ? _focusEdge : const Color(0x00FFFFFF)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            if (swatch != null) ...[_Swatch(swatch!), const SizedBox(width: 12)],
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: Look.body.copyWith(
-                      color: !enabled ? _quiet : (focused ? Look.white : const Color(0xE6FFFFFF)),
-                    ),
+      builder: (context, focused) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: FocusBand(
+          focused: focused,
+          marked: active,
+          overhang: _band,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                if (swatch != null) ...[_Swatch(swatch!), const SizedBox(width: 12)],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        label,
+                        style: Look.body.copyWith(
+                          color: !enabled ? _quiet : (focused ? Look.white : const Color(0xE6FFFFFF)),
+                        ),
+                      ),
+                      if (note != null) Prose(note!, style: Look.small.copyWith(color: _noteColor)),
+                    ],
                   ),
-                  if (note != null) Prose(note!, style: Look.small.copyWith(color: _noteColor)),
-                ],
-              ),
+                ),
+                if (value != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Text(value!, style: Look.value.copyWith(color: focused ? Look.white : _soft)),
+                  ),
+                if (toggle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Toggle(on: toggle!),
+                  ),
+                if (checked)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 12),
+                    child: Icon(Icons.check_rounded, size: 20, color: Look.white),
+                  ),
+                if (chevron) Icon(Icons.chevron_right_rounded, size: 20, color: focused ? _soft : _quiet),
+              ],
             ),
-            if (value != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: Text(value!, style: Look.value.copyWith(color: focused ? Look.white : _soft)),
-              ),
-            if (toggle != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: Toggle(on: toggle!),
-              ),
-            if (checked)
-              const Padding(
-                padding: EdgeInsets.only(left: 12),
-                child: Icon(Icons.check_rounded, size: 20, color: Look.white),
-              ),
-            if (chevron) Icon(Icons.chevron_right_rounded, size: 20, color: focused ? _soft : _quiet),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _folded(bool opened) => Container(
-    margin: const EdgeInsets.symmetric(vertical: 1),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-    decoration: BoxDecoration(
-      color: opened ? _openFill : const Color(0x00FFFFFF),
-      borderRadius: BorderRadius.circular(10),
-    ),
-    child: Text(
-      label,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: Look.body.copyWith(fontSize: 14, color: opened ? Look.white : _quiet),
+  Widget _folded(bool opened) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 1),
+    child: FocusBand(
+      focused: false,
+      marked: opened,
+      overhang: _band,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Look.body.copyWith(fontSize: 14, color: opened ? Look.white : _quiet),
+        ),
+      ),
     ),
   );
 }
@@ -2037,6 +2331,7 @@ class _Thumb extends StatelessWidget {
     super.key,
     this.picture,
     this.folder = false,
+    this.toDownload = false,
     this.checked = false,
     this.status,
     this.progress,
@@ -2050,6 +2345,9 @@ class _Thumb extends StatelessWidget {
 
   /// Stands for everything in a folder.
   final bool folder;
+
+  /// Not on the TV yet: picking it downloads it.
+  final bool toDownload;
   final bool checked;
 
   /// Said over the preview, e.g. "Downloading", with [progress] (0 to 1) as
@@ -2083,6 +2381,7 @@ class _Thumb extends StatelessWidget {
                 children: [
                   ?picture,
                   if (folder) const Positioned(left: 8, bottom: 8, child: _Badge(Icons.folder_outlined)),
+                  if (toDownload) const Positioned(left: 8, bottom: 8, child: _Badge(Icons.download_rounded)),
                   if (status != null)
                     ColoredBox(
                       color: const Color(0x99000000),
@@ -2200,45 +2499,47 @@ class _Slider extends StatelessWidget {
         onChanged(double.parse(next.clamp(min, max).toStringAsFixed(2)));
         return KeyEventResult.handled;
       },
-      builder: (context, focused) => AnimatedContainer(
-        duration: Look.fast,
-        curve: Look.ease,
-        margin: const EdgeInsets.symmetric(vertical: 1),
-        padding: const EdgeInsets.fromLTRB(13, 9, 13, 12),
-        decoration: BoxDecoration(
-          color: focused ? _focusFill : const Color(0x00FFFFFF),
-          border: Border.all(color: focused ? _focusEdge : const Color(0x00FFFFFF)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      builder: (context, focused) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: FocusBand(
+          focused: focused,
+          overhang: _band,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 13),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(label, style: Look.body.copyWith(color: focused ? Look.white : const Color(0xE6FFFFFF))),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: Look.body.copyWith(color: focused ? Look.white : const Color(0xE6FFFFFF)),
+                      ),
+                    ),
+                    // Arrows either side of the value while focused: Left and Right change it.
+                    // Their room is kept, so nothing moves as they come and go.
+                    AnimatedOpacity(
+                      opacity: focused ? 1 : 0,
+                      duration: Look.fast,
+                      child: const Icon(Icons.chevron_left_rounded, size: 18, color: _soft),
+                    ),
+                    Text(
+                      percent,
+                      style: Look.value.copyWith(color: focused ? Look.white : _soft, fontFeatures: Look.figures),
+                    ),
+                    AnimatedOpacity(
+                      opacity: focused ? 1 : 0,
+                      duration: Look.fast,
+                      child: const Icon(Icons.chevron_right_rounded, size: 18, color: _soft),
+                    ),
+                  ],
                 ),
-                // Arrows either side of the value while focused: Left and Right change it.
-                // Their room is kept, so nothing moves as they come and go.
-                AnimatedOpacity(
-                  opacity: focused ? 1 : 0,
-                  duration: Look.fast,
-                  child: const Icon(Icons.chevron_left_rounded, size: 18, color: _soft),
-                ),
-                Text(
-                  percent,
-                  style: Look.value.copyWith(color: focused ? Look.white : _soft, fontFeatures: Look.figures),
-                ),
-                AnimatedOpacity(
-                  opacity: focused ? 1 : 0,
-                  duration: Look.fast,
-                  child: const Icon(Icons.chevron_right_rounded, size: 18, color: _soft),
-                ),
+                const SizedBox(height: 10),
+                _Track(at: (value - min) / (max - min), usual: (usual - min) / (max - min), focused: focused),
               ],
             ),
-            const SizedBox(height: 10),
-            _Track(at: (value - min) / (max - min), usual: (usual - min) / (max - min), focused: focused),
-          ],
+          ),
         ),
       ),
     );

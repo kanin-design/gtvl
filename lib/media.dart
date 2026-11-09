@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 /// What a gallery holds. Each kind has a folder in GTVL's git repository, with
 /// a 480 x 270 JPEG preview of every file in its thumbs folder, named like
 /// the file; downloads go to the same folder in the app's files.
@@ -24,8 +26,9 @@ enum MediaKind {
   String count(int n) => n == 1 ? '1 $_one' : '$n ${_one}s';
 }
 
-/// A file in GTVL's collection: its title, where to get it, and its preview.
-typedef OnlineMedia = ({String name, String url, String preview});
+/// A file in GTVL's collection: its title, where to get it, its size in
+/// bytes, and its preview.
+typedef OnlineMedia = ({String name, String url, int size, String preview});
 
 /// Pictures and videos for the wallpaper: from the TV's storage, or from
 /// GTVL's collection online, downloaded when chosen.
@@ -47,11 +50,19 @@ abstract final class Media {
     return dot > 0 ? file.substring(0, dot) : file;
   }
 
-  /// "gold-v16.mp4" reads "Gold v16".
+  /// "gold-ring.mp4" reads "Gold ring". A picture size last in the name is
+  /// set apart: "fold-4k.mp4" reads "Fold · 4K".
   static String title(String path) {
     final words = stem(path).replaceAll(RegExp('[-_]+'), ' ').trim();
-    return words.isEmpty ? name(path) : words[0].toUpperCase() + words.substring(1);
+    if (words.isEmpty) return name(path);
+    final title = words[0].toUpperCase() + words.substring(1);
+    final size = _pictureSize.firstMatch(title);
+    if (size == null) return title;
+    final lines = size[2]!.toLowerCase();
+    return '${size[1]} · ${lines.endsWith('k') ? lines.toUpperCase() : lines}';
   }
+
+  static final _pictureSize = RegExp(r'^(.+) (\dk|\d{3,4}p)$', caseSensitive: false);
 
   /// The subfolders and files of [kind] in [path], each sorted by name. Hidden
   /// entries are left out, and so is Android's folder of app data, which other
@@ -93,10 +104,15 @@ abstract final class Media {
       return [
         if (entries is List)
           for (final entry in entries)
-            if (entry case {'name': final String file, 'download_url': final String url} when kind.matches(file))
+            if (entry case {
+              'name': final String file,
+              'download_url': final String url,
+              'size': final int size,
+            } when kind.matches(file))
               (
                 name: title(file),
                 url: url,
+                size: size,
                 preview: '${url.substring(0, url.lastIndexOf('/'))}/thumbs/${Uri.encodeComponent(stem(file))}.jpg',
               ),
       ];
@@ -152,12 +168,95 @@ abstract final class Media {
     }
   }
 
+  /// The collection's files of [kind] kept in [dir] once downloaded, each
+  /// with its size in bytes.
+  static Future<Map<String, int>> kept(String dir, MediaKind kind) async {
+    final kept = <String, int>{};
+    for (final file in (await list('$dir/${kind.folder}', kind)).files) {
+      try {
+        kept[file] = await File(file).length();
+      } on FileSystemException {
+        // Gone since it was listed.
+      }
+    }
+    return kept;
+  }
+
   /// Deletes a downloaded file; it comes again if chosen again.
   static Future<void> forget(String path) async {
     try {
       await File(path).delete();
     } on FileSystemException {
       // Already gone.
+    }
+  }
+
+  /// Deletes every downloaded file of [kind] in [dir], and any download left
+  /// half done, but for [except].
+  static Future<void> forgetAll(String dir, MediaKind kind, {Set<String> except = const {}}) async {
+    try {
+      for (final entry in await Directory('$dir/${kind.folder}').list().toList()) {
+        if (entry is File && !except.contains(entry.path)) await forget(entry.path);
+      }
+    } on FileSystemException {
+      // Nothing was ever downloaded.
+    }
+  }
+}
+
+/// Downloads from the collection under way. They outlive settings, so one
+/// still coming in shows as that when settings opens again, and never starts
+/// a second time.
+class Downloads extends ChangeNotifier {
+  /// Each download's url, with how much of it is done, 0 to 1.
+  final progress = <String, double>{};
+
+  /// Those the user stopped, until they end, and those that failed.
+  final stopping = <String>{};
+  final failed = <String>{};
+
+  /// Videos this TV turned out not to play, by url: known only once one is
+  /// here, so remembered while GTVL runs, not to come again for nothing.
+  final unplayable = <String>{};
+
+  /// Stops the download of [url] as its next piece arrives, or the wait for
+  /// that runs out.
+  void stop(String url) {
+    if (progress.containsKey(url) && stopping.add(url)) notifyListeners();
+  }
+
+  /// Downloads the collection's file at [url] into [dir] and returns its
+  /// path; null when it was stopped or failed, or is coming in already.
+  Future<String?> fetch(String url, String dir, MediaKind kind) async {
+    if (progress.containsKey(url)) return null;
+    progress[url] = 0;
+    failed.remove(url);
+    notifyListeners();
+    try {
+      final path = await Media.download(
+        url,
+        dir,
+        kind,
+        stop: () => stopping.contains(url),
+        onProgress: (done) {
+          // A step per percent, not one per chunk.
+          if ((done * 100).floor() > (progress[url]! * 100).floor()) {
+            progress[url] = done;
+            notifyListeners();
+          }
+        },
+      );
+      // Stopped as the last piece came in: the file stays, but isn't chosen.
+      return stopping.contains(url) ? null : path;
+    } on DownloadStopped {
+      return null;
+    } on Exception {
+      failed.add(url);
+      return null;
+    } finally {
+      progress.remove(url);
+      stopping.remove(url);
+      notifyListeners();
     }
   }
 }

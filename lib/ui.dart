@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show FontFeature, FontVariation, ImageFilter;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,10 +16,8 @@ abstract final class Look {
   static const dim = Color(0xB3FFFFFF);
   static const hairline = Color(0x1FFFFFFF);
 
-  /// A focused row: a light fill with a finer, brighter edge, to see from
-  /// across the room.
-  static const focusFill = Color(0x47FFFFFF);
-  static const focusEdge = Color(0x38FFFFFF);
+  /// The faint band across a menu behind the row in focus (FocusBand).
+  static const focusFill = Color(0x13FFFFFF);
   static const danger = Color(0xFFFF6B6B);
   static const shadow = [Shadow(color: Color(0x8C000000), blurRadius: 8, offset: Offset(0, 2))];
 
@@ -433,46 +430,32 @@ void reveal(BuildContext context, {double margin = 28, double endZone = 0}) {
   );
 }
 
-/// Frosted glass: blurs what is behind it by [sigma] (0 for none) and tints it.
-/// With [rim], light catches its edge, brightest at the top left, and its
-/// tint is a touch lighter at the top: a pane rather than a flat plate.
-/// [vibrancy] above 1 deepens the colours seen through it, as real glass
-/// keeps them, instead of letting the blur grey them out.
+/// GTVL's glass: a tint over what is behind it. No live blur: films play
+/// on the TV's own video layer, which no TV lets an app blur, and the Shield
+/// blurs nothing GTVL draws either. Over a still picture the dock lays a
+/// blurred copy of it under its glass (WallpaperBlur). With [rim], light
+/// catches its edge, brightest at the top left, and its tint is a touch
+/// lighter at the top: a pane, not a flat plate.
 class Glass extends StatelessWidget {
   const Glass({
     super.key,
     required this.child,
     this.tint = const Color(0x14FFFFFF),
-    this.sigma = 24,
     this.radius = BorderRadius.zero,
     this.border,
     this.rim = false,
-    this.vibrancy = 1,
   });
 
   final Widget child;
   final Color tint;
-  final double sigma;
   final BorderRadius radius;
   final BoxBorder? border;
   final bool rim;
-  final double vibrancy;
-
-  /// A colour matrix that scales saturation by [amount], keeping brightness.
-  static List<double> _saturation(double amount) {
-    const r = 0.2126, g = 0.7152, b = 0.0722;
-    final rest = 1 - amount;
-    return [
-      r * rest + amount, g * rest, b * rest, 0, 0, //
-      r * rest, g * rest + amount, b * rest, 0, 0,
-      r * rest, g * rest, b * rest + amount, 0, 0,
-      0, 0, 0, 1, 0,
-    ];
-  }
 
   @override
-  Widget build(BuildContext context) {
-    final Widget body = rim
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: radius,
+    child: rim
         ? CustomPaint(
             foregroundPainter: _Rim(radius),
             child: DecoratedBox(
@@ -491,21 +474,41 @@ class Glass extends StatelessWidget {
         : DecoratedBox(
             decoration: BoxDecoration(color: tint, borderRadius: radius, border: border),
             child: child,
-          );
-    // The same widgets with blur off: swapping them would rebuild everything
-    // inside, dock apps and their focus included.
-    final blur = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
-    return ClipRRect(
-      borderRadius: radius,
-      child: BackdropFilter(
-        enabled: sigma > 0,
-        filter: vibrancy == 1
-            ? blur
-            : ImageFilter.compose(outer: ColorFilter.matrix(_saturation(vibrancy)), inner: blur),
-        child: body,
-      ),
-    );
-  }
+          ),
+  );
+}
+
+/// The colours the dock's glass can be tinted, as the tint picker offers
+/// them in rows of four: light to dark, then blues, greens and warm ones.
+/// Smoke, the default, is the glass's dark grey as it was.
+abstract final class Tints {
+  static const smoke = 'smoke';
+
+  static const all = <({String id, String name, Color colour})>[
+    (id: 'frost', name: 'Frost', colour: Color(0xFFF2F4F7)),
+    (id: 'mist', name: 'Mist', colour: Color(0xFFAEB4BE)),
+    (id: 'graphite', name: 'Graphite', colour: Color(0xFF3A3A3C)),
+    (id: smoke, name: 'Smoke', colour: Color(0xFF1C1C1E)),
+    (id: 'midnight', name: 'Midnight', colour: Color(0xFF1C2A4A)),
+    (id: 'navy', name: 'Navy', colour: Color(0xFF0F1E3D)),
+    (id: 'ocean', name: 'Ocean', colour: Color(0xFF103A4D)),
+    (id: 'teal', name: 'Teal', colour: Color(0xFF0E3B3B)),
+    (id: 'forest', name: 'Forest', colour: Color(0xFF14301F)),
+    (id: 'sage', name: 'Sage', colour: Color(0xFF2E4A3A)),
+    (id: 'olive', name: 'Olive', colour: Color(0xFF3D3A1E)),
+    (id: 'amber', name: 'Amber', colour: Color(0xFF5A4A2E)),
+    (id: 'rust', name: 'Rust', colour: Color(0xFF5C2A1E)),
+    (id: 'rose', name: 'Rose', colour: Color(0xFF4A2E3A)),
+    (id: 'plum', name: 'Plum', colour: Color(0xFF3A1F3D)),
+    (id: 'indigo', name: 'Indigo', colour: Color(0xFF2A1F4A)),
+  ];
+
+  /// The tint kept as [id]; Smoke for one unknown.
+  static ({String id, String name, Color colour}) of(String id) =>
+      all.firstWhere((tint) => tint.id == id, orElse: () => all[3]);
+
+  /// The glass's tint: [id]'s colour at [level] of 10, 5 half covering what is behind it.
+  static Color glass(String id, int level) => of(id).colour.withValues(alpha: level.clamp(1, 10) / 10);
 }
 
 /// A one-pixel edge of light around glass, from bright at the top left to
@@ -543,8 +546,7 @@ class Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Glass(
-    tint: const Color(0xA61C1C1E),
-    sigma: 12,
+    tint: const Color(0xC81C1C1E),
     radius: BorderRadius.circular(18),
     rim: true,
     child: Padding(
@@ -662,6 +664,72 @@ class Badge extends StatelessWidget {
 }
 
 /// A one-pixel line, optionally starting [indent] in from the left.
+/// What marks the row in focus in every menu: a faint band right across
+/// the menu, and a short white bar at its left end, as the settings rail
+/// marks the section open beside it. [marked] shows the bar alone, for the
+/// section open or the row a deeper level opened from. [overhang] is how far
+/// the band reaches past the row, to the menu's edges; [barInset] how far in
+/// from the band's left end the bar sits, as it does off the screen's edge.
+class FocusBand extends StatelessWidget {
+  const FocusBand({
+    super.key,
+    required this.focused,
+    this.marked = false,
+    this.overhang = EdgeInsets.zero,
+    this.barInset = 0,
+    required this.child,
+  });
+
+  final bool focused, marked;
+  final EdgeInsets overhang;
+  final double barInset;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    fit: StackFit.passthrough,
+    clipBehavior: Clip.none,
+    children: [
+      Positioned(
+        left: -overhang.left,
+        right: -overhang.right,
+        top: 0,
+        bottom: 0,
+        child: AnimatedOpacity(
+          opacity: focused ? 1 : 0,
+          duration: Look.fast,
+          child: const ColoredBox(color: Look.focusFill),
+        ),
+      ),
+      Positioned(
+        left: barInset - overhang.left,
+        top: 0,
+        bottom: 0,
+        child: Center(
+          child: AnimatedOpacity(
+            opacity: focused || marked ? 1 : 0,
+            duration: Look.fast,
+            child: SizedBox(
+              width: 3,
+              height: 18,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Look.white,
+                  // Square where it meets the band's end, round where it stands free.
+                  borderRadius: barInset > 0
+                      ? BorderRadius.circular(2)
+                      : const BorderRadius.horizontal(right: Radius.circular(2)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      child,
+    ],
+  );
+}
+
 class Hairline extends StatelessWidget {
   const Hairline({super.key, this.indent = 0});
 

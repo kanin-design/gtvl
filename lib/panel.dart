@@ -34,8 +34,8 @@ class Panel extends StatelessWidget {
         curve: Look.ease,
         width: width,
         child: Glass(
-          tint: const Color(0xA61C1C1E),
-          sigma: 30,
+          // A step darker than glass that blurs: what is behind shows through as it is.
+          tint: const Color(0xC81C1C1E),
           radius: BorderRadius.circular(22),
           rim: true,
           child: AnimatedSize(

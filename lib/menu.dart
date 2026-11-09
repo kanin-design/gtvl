@@ -23,7 +23,7 @@ class MenuItem {
 
 /// A menu on GTVL's pop-up [Panel]: groups of rows split by a full-width
 /// hairline (rows within a group by an inset one), and an optional centred
-/// action at the bottom. Focus fills a row as in settings.
+/// action at the bottom. Focus marks a row as in settings (FocusBand).
 class GlassMenu extends StatefulWidget {
   const GlassMenu({super.key, required this.title, this.subtitle, this.leading, required this.groups, this.footer});
 
@@ -39,7 +39,7 @@ class GlassMenu extends StatefulWidget {
 
 class _GlassMenuState extends State<GlassMenu> {
   /// The row in focus, by its place among all rows. The inset lines beside
-  /// it hide, so its fill meets the rows above and below in a straight edge.
+  /// it hide, so nothing crosses its band.
   final _focused = ValueNotifier<int?>(null);
 
   @override
@@ -112,8 +112,8 @@ class _Divider extends StatelessWidget {
   Widget build(BuildContext context) => ValueListenableBuilder(
     valueListenable: focused,
     builder: (context, row, line) => Opacity(opacity: row == below || row == below - 1 ? 0 : 1, child: line),
-    // Level with the rows' text: their margin, padding, icon and gap.
-    child: const Hairline(indent: 46),
+    // Level with the rows' text: their padding, icon and gap.
+    child: const Hairline(indent: 47),
   );
 }
 
@@ -133,32 +133,28 @@ class _MenuRow extends StatelessWidget {
     builder: (context, focused) {
       final color = (item.destructive ? Look.danger : Look.white).withValues(alpha: focused ? 1 : 0.88);
       final text = Text(item.label, style: Look.body.copyWith(color: color));
-      return AnimatedContainer(
-        duration: Look.fast,
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-        decoration: BoxDecoration(
-          color: focused ? Look.focusFill : const Color(0x00FFFFFF),
-          border: Border.all(color: focused ? Look.focusEdge : const Color(0x00FFFFFF)),
-          borderRadius: BorderRadius.circular(10),
+      return FocusBand(
+        focused: focused,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 38),
+          padding: const EdgeInsets.symmetric(horizontal: 17),
+          alignment: centered ? Alignment.center : Alignment.centerLeft,
+          child: centered
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (item.icon != null) ...[Icon(item.icon, size: 18, color: color), const SizedBox(width: 8)],
+                    text,
+                  ],
+                )
+              : Row(
+                  children: [
+                    SizedBox(width: 18, child: item.icon == null ? null : Icon(item.icon, size: 18, color: color)),
+                    const SizedBox(width: 12),
+                    Expanded(child: text),
+                  ],
+                ),
         ),
-        constraints: const BoxConstraints(minHeight: 38),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        alignment: centered ? Alignment.center : Alignment.centerLeft,
-        child: centered
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (item.icon != null) ...[Icon(item.icon, size: 18, color: color), const SizedBox(width: 8)],
-                  text,
-                ],
-              )
-            : Row(
-                children: [
-                  SizedBox(width: 18, child: item.icon == null ? null : Icon(item.icon, size: 18, color: color)),
-                  const SizedBox(width: 12),
-                  Expanded(child: text),
-                ],
-              ),
       );
     },
   );

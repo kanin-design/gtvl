@@ -6,6 +6,7 @@ import 'aerials.dart';
 import 'apps.dart';
 import 'channels.dart';
 import 'config.dart';
+import 'media.dart';
 import 'native.dart';
 import 'plex.dart';
 import 'status.dart';
@@ -33,6 +34,9 @@ class Services {
 
   /// New versions of GTVL, from its GitHub releases.
   final Updates updates;
+
+  /// Wallpapers coming in from GTVL's collection.
+  final downloads = Downloads();
 
   /// What the wallpaper shows now, e.g. "Hawaii · Pu'u O 'Umi"; null when nothing to say.
   final caption = ValueNotifier<String?>(null);

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import 'aerials.dart';
@@ -62,6 +64,8 @@ class Wallpaper extends StatelessWidget {
                 every: Duration(minutes: config.pictureMinutes),
                 shuffle: config.pictureShuffle,
                 cacheWidth: size.width.round(),
+                blur: config.glassBlur,
+                dimming: config.dimming,
               )
             : null;
         final filmShows = beneath && (saverFilm || !still);
@@ -135,6 +139,10 @@ Widget _aerials(Services s, Config config, {bool caption = true}) {
 /// The pictures [sources] stand for (picture files, and folders standing for
 /// every picture in them), each fading into the next after [every], in the
 /// order chosen or shuffled. A single picture just stays.
+///
+/// The dock's glass shows the picture blurred by [blur] (dp) and dimmed by
+/// [dimming] as the screen dims it: one small copy a picture, made as it
+/// shows ([BlurredWallpaper]).
 class PictureShow extends StatefulWidget {
   const PictureShow({
     super.key,
@@ -142,6 +150,8 @@ class PictureShow extends StatefulWidget {
     required this.every,
     required this.shuffle,
     required this.cacheWidth,
+    this.blur = 0,
+    this.dimming = 0,
   });
 
   final List<String> sources;
@@ -151,8 +161,13 @@ class PictureShow extends StatefulWidget {
   /// Pictures are decoded at the screen's width, however large they are.
   final int cacheWidth;
 
+  final double blur, dimming;
+
   /// The config changes [sources] in place, so the state compares this.
   String get _choice => '$shuffle ${sources.join('\n')}';
+
+  /// How long one picture takes to fade into the next.
+  static const fade = Duration(seconds: 2);
 
   @override
   State<PictureShow> createState() => _PictureShowState();
@@ -180,6 +195,7 @@ class _PictureShowState extends State<PictureShow> {
     } else if (old.every != widget.every) {
       _start();
     }
+    if (old.blur != widget.blur || old.dimming != widget.dimming) _blurCopy();
   }
 
   /// Finds the pictures. One still chosen stays on screen; else the first
@@ -194,22 +210,82 @@ class _PictureShowState extends State<PictureShow> {
       _pictures = found;
       if (!found.contains(_shown)) _shown = found.firstOrNull;
     });
+    _blurCopy();
     _start();
   }
 
   void _start() {
     _next?.cancel();
     if (_pictures.length < 2) return;
-    _next = Timer.periodic(
-      widget.every,
-      (_) => setState(() => _shown = _pictures[(_pictures.indexOf(_shown ?? '') + 1) % _pictures.length]),
-    );
+    _next = Timer.periodic(widget.every, (_) {
+      setState(() => _shown = _pictures[(_pictures.indexOf(_shown ?? '') + 1) % _pictures.length]);
+      _blurCopy();
+    });
+  }
+
+  /// Copies made so far: only the newest one shows.
+  int _copies = 0;
+
+  /// Makes the blurred copy of the picture shown ([BlurredWallpaper]): small,
+  /// as it is blurred anyway, covering the screen as the picture does.
+  Future<void> _blurCopy() async {
+    final copy = ++_copies;
+    final path = _shown;
+    final sigma = widget.blur;
+    if (path == null || sigma <= 0) {
+      BlurredWallpaper.show(null);
+      return;
+    }
+    final screen = MediaQuery.sizeOf(context);
+    const width = 480.0;
+    try {
+      final codec = await ui.instantiateImageCodec(await File(path).readAsBytes(), targetWidth: 2 * width.round());
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      final source = frame.image;
+      if (!mounted || copy != _copies) {
+        source.dispose();
+        return;
+      }
+      final out = Size(width, (width * screen.height / screen.width).roundToDouble());
+      final scale = width / screen.width;
+      final size = Size(source.width.toDouble(), source.height.toDouble());
+      final fitted = applyBoxFit(BoxFit.cover, size, out);
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder)
+        ..drawImageRect(
+          source,
+          Alignment.center.inscribe(fitted.source, Offset.zero & size),
+          Offset.zero & out,
+          Paint()
+            ..filterQuality = FilterQuality.medium
+            ..imageFilter = ui.ImageFilter.blur(sigmaX: sigma * scale, sigmaY: sigma * scale, tileMode: TileMode.clamp),
+        );
+      if (widget.dimming > 0) {
+        canvas.drawRect(Offset.zero & out, Paint()..color = Color.fromRGBO(0, 0, 0, widget.dimming));
+      }
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(out.width.round(), out.height.round());
+      picture.dispose();
+      source.dispose();
+      if (!mounted || copy != _copies) {
+        image.dispose();
+        return;
+      }
+      BlurredWallpaper.show(image);
+    } on Exception {
+      // Unreadable: the glass tints the picture without blurring it.
+      if (mounted && copy == _copies) BlurredWallpaper.show(null);
+    }
   }
 
   @override
   void dispose() {
     _next?.cancel();
     _missing.reset();
+    _copies++;
+    // After this frame: whatever lays the copy under glass may be going too.
+    WidgetsBinding.instance.addPostFrameCallback((_) => BlurredWallpaper.show(null));
     super.dispose();
   }
 
@@ -218,10 +294,161 @@ class _PictureShowState extends State<PictureShow> {
     final path = _shown;
     if (path == null) return const SizedBox.shrink();
     return AnimatedSwitcher(
-      duration: const Duration(seconds: 2),
+      duration: PictureShow.fade,
       layoutBuilder: (current, previous) => Stack(fit: StackFit.expand, children: [...previous, ?current]),
       child: Image.file(File(path), key: ValueKey(path), fit: BoxFit.cover, cacheWidth: widget.cacheWidth),
     );
+  }
+}
+
+/// The picture on screen, blurred and dimmed, as PictureShow copies it for
+/// the dock's glass: none over a film, a gradient (which blurs to itself),
+/// or with blur off.
+abstract final class BlurredWallpaper {
+  static final image = ValueNotifier<ui.Image?>(null);
+
+  /// Shows [next] in place of the copy before, or none.
+  static void show(ui.Image? next) {
+    final old = image.value;
+    if (identical(old, next)) return;
+    image.value = next;
+    old?.dispose();
+  }
+}
+
+/// [BlurredWallpaper]'s copy, as much of it as lies under this box, lined up
+/// with the picture on screen; each copy fades into the next as the pictures
+/// do. [moving] is how far the box has been moved from its place, as the
+/// dock slides: each change lines the copy up again.
+class WallpaperBlur extends StatefulWidget {
+  const WallpaperBlur({super.key, this.moving = Offset.zero});
+
+  final Offset moving;
+
+  @override
+  State<WallpaperBlur> createState() => _WallpaperBlurState();
+}
+
+class _WallpaperBlurState extends State<WallpaperBlur> with SingleTickerProviderStateMixin {
+  late final _fade = AnimationController(vsync: this, duration: PictureShow.fade, value: 1);
+
+  @override
+  void dispose() {
+    _fade.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _Blur(fade: _fade, screen: MediaQuery.sizeOf(context), moving: widget.moving);
+}
+
+class _Blur extends LeafRenderObjectWidget {
+  const _Blur({required this.fade, required this.screen, required this.moving});
+
+  final AnimationController fade;
+  final Size screen;
+  final Offset moving;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderBlur(fade, screen, moving);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderBlur render) => render
+    ..screen = screen
+    ..moving = moving;
+}
+
+class _RenderBlur extends RenderBox {
+  _RenderBlur(this._fade, this._screen, this._moving);
+
+  final AnimationController _fade;
+  Size _screen;
+  Offset _moving;
+
+  /// The copy fading out, and the one fading in or shown: clones of
+  /// BlurredWallpaper's, held while they are drawn.
+  ui.Image? _before, _now;
+
+  set screen(Size value) {
+    if (value == _screen) return;
+    _screen = value;
+    markNeedsPaint();
+  }
+
+  set moving(Offset value) {
+    if (value == _moving) return;
+    _moving = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _now = BlurredWallpaper.image.value?.clone();
+    BlurredWallpaper.image.addListener(_changed);
+    _fade
+      ..addListener(markNeedsPaint)
+      ..addStatusListener(_faded);
+  }
+
+  @override
+  void detach() {
+    BlurredWallpaper.image.removeListener(_changed);
+    _fade
+      ..removeListener(markNeedsPaint)
+      ..removeStatusListener(_faded);
+    _before?.dispose();
+    _now?.dispose();
+    _before = _now = null;
+    super.detach();
+  }
+
+  void _changed() {
+    _before?.dispose();
+    _before = _now;
+    _now = BlurredWallpaper.image.value?.clone();
+    _fade.forward(from: 0);
+    markNeedsPaint();
+  }
+
+  void _faded(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _before?.dispose();
+    _before = null;
+    markNeedsPaint();
+  }
+
+  @override
+  bool get sizedByParent => true;
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) => constraints.biggest;
+
+  // A fade repaints this alone, not the dock over it.
+  @override
+  bool get isRepaintBoundary => true;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final before = _before, now = _now;
+    if (before == null && now == null) return;
+    // The copy covers the screen, as the picture does: its corner is where the screen's is from here.
+    final screen = (offset - localToGlobal(Offset.zero)) & _screen;
+    final canvas = context.canvas
+      ..save()
+      ..clipRect(offset & size);
+    void draw(ui.Image image, double opacity) => canvas.drawImageRect(
+      image,
+      Offset.zero & Size(image.width.toDouble(), image.height.toDouble()),
+      screen,
+      Paint()
+        ..filterQuality = FilterQuality.medium
+        ..color = Color.fromRGBO(255, 255, 255, opacity),
+    );
+    // Fading in over the one before, or out to the picture itself.
+    if (before != null) draw(before, now == null ? 1 - _fade.value : 1);
+    if (now != null) draw(now, _fade.value);
+    canvas.restore();
   }
 }
 

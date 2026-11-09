@@ -422,113 +422,145 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                 ),
               ),
-              ListenableBuilder(
-                listenable: Listenable.merge([s.apps, s.config, s.plex, s.appRows]),
-                builder: (context, _) => Stack(
+              // Under the settings panel only the wallpaper shows.
+              UnderSettings(
+                child: Stack(
+                  fit: StackFit.expand,
                   children: [
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      top: g.gridTop,
-                      bottom: 0,
-                      child: FadeTransition(
-                        opacity: _present,
-                        child: AnimatedBuilder(
-                          animation: eased,
-                          child: RepaintBoundary(child: _gridView(g)),
-                          // Below the screen while home; not painted at all until it moves.
-                          builder: (context, grid) => Opacity(
-                            opacity: eased.value == 0 ? 0 : 1,
-                            child: Transform.translate(
-                              offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
-                              child: grid,
+                    ListenableBuilder(
+                      listenable: Listenable.merge([s.apps, s.config, s.plex, s.appRows]),
+                      builder: (context, _) => Stack(
+                        children: [
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            top: g.gridTop,
+                            bottom: 0,
+                            child: FadeTransition(
+                              opacity: _present,
+                              child: AnimatedBuilder(
+                                animation: eased,
+                                child: RepaintBoundary(child: _gridView(g)),
+                                // Below the screen while home; not painted at all until it moves.
+                                builder: (context, grid) => Opacity(
+                                  opacity: eased.value == 0 ? 0 : 1,
+                                  child: Transform.translate(
+                                    offset: Offset(0, (1 - eased.value) * (g.height - g.gridTop)),
+                                    child: grid,
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      top: g.dockIdle - _bleedRoom,
-                      height: g.dockHeight + 2 * _bleedRoom,
-                      child: AnimatedBuilder(
-                        animation: Listenable.merge([eased, _saving]),
-                        child: RepaintBoundary(child: _dockBar(g)),
-                        // Off the bottom for the screensaver, not faded, which would stop its glass blurring.
-                        builder: (context, dock) => Transform.translate(
-                          offset: Offset(
-                            0,
-                            eased.value * (g.dockTop - g.dockIdle) +
-                                _saving.value * (g.height - g.dockIdle + _bleedRoom),
-                          ),
-                          child: Offstage(
-                            offstage: _saving.value == 1,
-                            child: Stack(
-                              children: [
-                                Positioned.fill(
-                                  child: RepaintBoundary(child: _bleed(g, (1 - eased.value) * (1 - _saving.value))),
-                                ),
-                                Positioned(left: 0, right: 0, top: _bleedRoom, height: g.dockHeight, child: dock!),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      top: g.dockIdle - 48,
-                      child: Center(
-                        child: FadeTransition(
-                          opacity: _present,
-                          child: ValueListenableBuilder<String?>(
-                            valueListenable: s.notice,
-                            builder: (context, notice, _) => AnimatedSwitcher(
-                              duration: Look.medium,
-                              switchInCurve: Look.ease,
-                              switchOutCurve: Curves.easeIn,
-                              child: switch ((_moving, notice)) {
-                                (_?, _) => const Pill(
-                                  'Left and Right move the app · OK when done',
-                                  key: ValueKey('move'),
-                                ),
-                                (_, final text?) => Pill(text, key: ValueKey(text)),
-                                _ => const SizedBox.shrink(),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            top: g.dockIdle - _bleedRoom,
+                            height: g.dockHeight + 2 * _bleedRoom,
+                            child: AnimatedBuilder(
+                              animation: Listenable.merge([eased, _saving]),
+                              child: RepaintBoundary(child: _dockBar(g)),
+                              // Off the bottom for the screensaver.
+                              builder: (context, dock) {
+                                final moved = Offset(
+                                  0,
+                                  eased.value * (g.dockTop - g.dockIdle) +
+                                      _saving.value * (g.height - g.dockIdle + _bleedRoom),
+                                );
+                                return Transform.translate(
+                                  offset: moved,
+                                  child: Offstage(
+                                    offstage: _saving.value == 1,
+                                    child: Stack(
+                                      children: [
+                                        // A still picture behind, blurred, under the lamp's light on it and the glass.
+                                        Positioned(
+                                          left: 0,
+                                          right: 0,
+                                          top: _bleedRoom,
+                                          height: g.dockHeight,
+                                          child: WallpaperBlur(moving: moved),
+                                        ),
+                                        Positioned.fill(
+                                          child: RepaintBoundary(
+                                            child: _bleed(g, (1 - eased.value) * (1 - _saving.value)),
+                                          ),
+                                        ),
+                                        Positioned(
+                                          left: 0,
+                                          right: 0,
+                                          top: _bleedRoom,
+                                          height: g.dockHeight,
+                                          child: dock!,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
                               },
                             ),
                           ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            top: g.dockIdle - 48,
+                            child: Center(
+                              child: FadeTransition(
+                                opacity: _present,
+                                child: ValueListenableBuilder<String?>(
+                                  valueListenable: s.notice,
+                                  builder: (context, notice, _) => AnimatedSwitcher(
+                                    duration: Look.medium,
+                                    switchInCurve: Look.ease,
+                                    switchOutCurve: Curves.easeIn,
+                                    child: switch ((_moving, notice)) {
+                                      (_?, _) => const Pill(
+                                        'Left and Right move the app · OK when done',
+                                        key: ValueKey('move'),
+                                      ),
+                                      (_, final text?) => Pill(text, key: ValueKey(text)),
+                                      _ => const SizedBox.shrink(),
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // A soft shade behind the time and date only, so they hold on bright film.
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      width: 480,
+                      height: 240,
+                      child: IgnorePointer(
+                        child: ListenableBuilder(
+                          listenable: _clockChanges,
+                          builder: (context, shade) =>
+                              AnimatedOpacity(opacity: _clockShown ? 1 : 0, duration: Look.medium, child: shade),
+                          child: const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: RadialGradient(
+                                center: Alignment(0.22, -0.1),
+                                colors: [Color(0x66000000), Color(0x00000000)],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
+                    ),
+                    // The icons' glyphs line up with the dock's first app.
+                    Positioned(
+                      left: g.pad - (_chipGap + _chip - _glyph) / 2,
+                      right: g.pad,
+                      top: g.pad - 8,
+                      child: _topBar(),
                     ),
                   ],
                 ),
               ),
-              // A soft shade behind the time and date only, so they hold on bright film.
-              Positioned(
-                right: 0,
-                top: 0,
-                width: 480,
-                height: 240,
-                child: IgnorePointer(
-                  child: ListenableBuilder(
-                    listenable: _clockChanges,
-                    builder: (context, shade) =>
-                        AnimatedOpacity(opacity: _clockShown ? 1 : 0, duration: Look.medium, child: shade),
-                    child: const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: RadialGradient(
-                          center: Alignment(0.22, -0.1),
-                          colors: [Color(0x66000000), Color(0x00000000)],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // The icons' glyphs line up with the dock's first app.
-              Positioned(left: g.pad - (_chipGap + _chip - _glyph) / 2, right: g.pad, top: g.pad - 8, child: _topBar()),
             ],
           );
         },
@@ -564,15 +596,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _molten.focus(null);
         }
       },
-      // Blur reaches no film beneath the screen, so with one it costs for nothing.
-      child: ValueListenableBuilder(
-        valueListenable: s.filmBeneath,
-        builder: (context, beneath, band) => Glass(
-          sigma: beneath ? 0 : math.max(c.glassBlur, 16),
-          tint: const Color(0x801C1C1E),
-          vibrancy: 1.35,
-          child: band!,
-        ),
+      child: Glass(
+        tint: Tints.glass(c.tintColour, c.tintLevel),
         child: CustomPaint(
           painter: _BandLight(line: c.lineWidth, alpha: c.lineAlpha),
           child: apps.isEmpty
@@ -946,7 +971,7 @@ class TopIcon extends StatelessWidget {
                   ? const Color(0x00FFFFFF)
                   : glow != null
                   ? _rim(glow)
-                  : Look.focusEdge,
+                  : const Color(0x38FFFFFF),
             ),
           ),
           child: Stack(
@@ -1425,9 +1450,7 @@ class _DockPreviewState extends State<DockPreview> with SingleTickerProviderStat
                     top: _room,
                     height: g.dockHeight,
                     child: Glass(
-                      sigma: math.max(pick('glassBlur', c.glassBlur), 16),
-                      tint: const Color(0x801C1C1E),
-                      vibrancy: 1.35,
+                      tint: Tints.glass(pick('tintColour', c.tintColour), pick('tintLevel', c.tintLevel)),
                       child: CustomPaint(
                         painter: _BandLight(
                           line: pick('lineWidth', c.lineWidth),
